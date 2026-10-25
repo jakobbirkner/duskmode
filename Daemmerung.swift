@@ -5,8 +5,9 @@
 // Einstellungen: Dämmerung noch einmal öffnen (Spotlight, Programme-Ordner) – dann kommt ein
 // kleines Fenster, und solange es offen ist, steht die App auch im Dock. Fenster zu (⌘W) heißt
 // nicht beenden – die App läuft weiter; nur ⌘Q / „Beenden“ hört auf. Im Fenster: Automatik an/aus,
-// das Licht live (Horizont oder Skala, Klick schaltet um) mit Lichtfarbe, die Bildschirmhelligkeit
-// als kleines MacBook, die Grenzen als freie Zahlen mit Plus/Minus (Dunkel unter, Abstand bis hell,
+// live der Horizont (mit Lichtfarbe) und darunter zwei Balken für Licht und Bildschirmhelligkeit,
+// je ein Schalter „nach dem Umgebungslicht“ / „nach der Bildschirmhelligkeit“ (dunkel, sobald eins
+// dunkel sagt), die Grenzen als freie Zahlen mit Plus/Minus (Dunkel unter, Abstand bis hell,
 // Bildschirm unter), „Gerade dunkel genug? Als Grenze nehmen“, Autostart und auf
 // Wunsch doch ein Symbol in der Menüleiste (Sonne am Horizont – kein Mond, der sähe aus wie das
 // Fokus-Symbol „Nicht stören“).
@@ -217,14 +218,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     var weichHelligkeit: Double?
     var weichKelvin: Double?
     var weichFarbton: (Double, Double, Double)?
-    var ansicht: Int {          // 0 Horizont, 1 Skala – Klick auf die Grafik schaltet um
-        get { ablage.integer(forKey: "ansicht") % 2 }
-        set {
-            ablage.set(newValue, forKey: "ansicht")
-            objectWillChange.send()
-        }
-    }
-
     var automatik: Bool {
         get { ablage.object(forKey: "automatik") as? Bool ?? true }
         set { ablage.set(newValue, forKey: "automatik") }
@@ -241,13 +234,27 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         set { ablage.set(max(0, newValue), forKey: "abstand") }
     }
     var hellAb: Double { schwelle + abstand }
-    /// Darunter zählt auch der Bildschirm als dunkel (0 = nie). Bis 25.10.2026 nur an/aus bei 10 %.
+    /// Darunter zählt der Bildschirm als dunkel. Ob er überhaupt zählt, sagt `nachHelligkeit`
+    /// (bis 26.10.2026 hieß 0 % „nie“, noch früher gab es nur an/aus bei 10 %).
     var helligkeitsGrenze: Double {
         get {
-            if let wert = ablage.object(forKey: "helligkeitsGrenze") as? Double { return wert }
-            return ablage.object(forKey: "auchHelligkeit") as? Bool == false ? 0 : 0.10
+            let wert = ablage.object(forKey: "helligkeitsGrenze") as? Double ?? 0.10
+            return wert > 0 ? wert : 0.10
         }
         set { ablage.set(newValue, forKey: "helligkeitsGrenze") }
+    }
+    /// Die zwei Wege, die zusammen entscheiden – jeder für sich abschaltbar
+    var nachLicht: Bool {
+        get { ablage.object(forKey: "nachLicht") as? Bool ?? true }
+        set { ablage.set(newValue, forKey: "nachLicht") }
+    }
+    var nachHelligkeit: Bool {
+        get {
+            if let an = ablage.object(forKey: "nachHelligkeit") as? Bool { return an }
+            if ablage.object(forKey: "helligkeitsGrenze") as? Double == 0 { return false }
+            return ablage.object(forKey: "auchHelligkeit") as? Bool ?? true
+        }
+        set { ablage.set(newValue, forKey: "nachHelligkeit") }
     }
     var symbolZeigen: Bool {
         get { ablage.bool(forKey: "symbolZeigen") }
@@ -381,13 +388,25 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         return Messung(licht: Sensor.lesen(), helligkeit: Bildschirm.helligkeit(id))
     }
 
-    /// true = dunkel, false = hell, nil = dazwischen (bleibt, wie es ist)
+    /// Was das Licht allein sagt: true = dunkel, false = hell, nil = dazwischen oder abgeschaltet
+    func lichtSagt(_ m: Messung) -> Bool? {
+        guard nachLicht, let l = m.lux else { return nil }
+        return l < schwelle ? true : l >= hellAb ? false : nil
+    }
+
+    /// Was der Bildschirm allein sagt: true = dunkel (unter der Grenze), false = nicht; nil = abgeschaltet
+    func bildschirmSagt(_ m: Messung) -> Bool? {
+        guard nachHelligkeit, let h = m.helligkeit else { return nil }
+        return h < helligkeitsGrenze
+    }
+
+    /// Beide zusammen: dunkel, sobald einer dunkel sagt; hell nur, wenn keiner dunkel sagt und das Licht
+    /// (falls es mitzählt) hell sagt. nil = bleibt, wie es ist.
     func soll(_ m: Messung) -> Bool? {
-        let schwach = (m.helligkeit ?? 1) < helligkeitsGrenze
-        guard let l = m.lux else { return schwach ? true : nil }
-        if l < schwelle || schwach { return true }
-        if l >= hellAb { return false }
-        return nil
+        let licht = lichtSagt(m), bildschirm = bildschirmSagt(m)
+        if licht == true || bildschirm == true { return true }
+        if nachLicht { return licht }      // false = hell, nil = im Abstand dazwischen
+        return bildschirm                  // nur der Bildschirm zählt: false = hell
     }
 
     func bewerte(frisch: Bool = false) {
@@ -402,7 +421,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         guard automatik, let m = gemessen, Date() >= ruhigBis,
               -eigeneAenderung.timeIntervalSinceNow > 1 else { return }  // eben erst umgeschaltet
         var s = soll(m)
-        if s == nil && frisch, let l = m.lux { s = l < (schwelle + hellAb) / 2 }
+        if s == nil && frisch && nachLicht, let l = m.lux { s = l < (schwelle + hellAb) / 2 }
         if angehalten {
             // Pause endet, sobald sich das Licht wirklich ändert
             guard let s, s != sollBeimAnhalten else { return }
@@ -486,9 +505,21 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     }
 
     func setzeHelligkeitsGrenze(_ wert: Double) {
-        helligkeitsGrenze = max(0, min(1, wert))
+        helligkeitsGrenze = max(0.01, min(1, wert))
         angehalten = false
         bewerte()
+    }
+
+    func setzeNachLicht(_ an: Bool) {
+        nachLicht = an
+        angehalten = false
+        bewerte(frisch: true)
+    }
+
+    func setzeNachHelligkeit(_ an: Bool) {
+        nachHelligkeit = an
+        angehalten = false
+        bewerte(frisch: true)
     }
 
     var autostart: Bool {
@@ -567,13 +598,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
             return t("Pausiert, weil von Hand umgestellt – bis sich das Licht ändert",
                      "Paused because you switched by hand – until the light changes")
         }
+        if !nachLicht && !nachHelligkeit {
+            return t("Weder Licht noch Bildschirm eingeschaltet – schaltet nichts um",
+                     "Neither light nor screen switched on – nothing switches")
+        }
         let jetzt = Erscheinung.dunkel ? t("Gerade dunkel", "Dark right now") : t("Gerade hell", "Light right now")
         // warum – damit klar ist, ob das Licht oder der Bildschirm entschieden hat
         var grund = ""
         if let m = messung, Erscheinung.dunkel {
-            if (m.helligkeit ?? 1) < helligkeitsGrenze && (m.lux ?? 0) >= schwelle {
+            if bildschirmSagt(m) == true && lichtSagt(m) != true {
                 grund = t(" – wegen der Bildschirmhelligkeit", " – because of the screen brightness")
-            } else if let l = m.lux, l >= schwelle, l < hellAb {
+            } else if nachLicht, lichtSagt(m) == nil, (m.lux ?? 0) >= schwelle {
                 grund = t(" – hell wird es erst ab \(lux(hellAb))", " – turns light from \(lux(hellAb))")
             }
         }
@@ -649,48 +684,62 @@ struct Einstellungen: View {
             Section {
                 Toggle(isOn: Binding(get: { app.automatik }, set: { app.setzeAutomatik($0) })) {
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(t("Hell und dunkel nach dem Umgebungslicht", "Light and dark follow the ambient light"))
+                        Text(t("Hell und dunkel automatisch", "Light and dark automatically"))
                         Text(app.zustandText()).font(.callout).foregroundStyle(.secondary)
                     }
                 }
                 .toggleStyle(.switch)
             }
 
-            Section(t("Licht", "Light")) {
+            Section(t("Jetzt", "Now")) {
                 LichtGrafik(app: app)
-                BildschirmZeile(app: app)
             }
 
             Section {
-                ZahlFeld(titel: t("Dunkel unter", "Dark below"),
-                         wert: Binding(get: { app.schwelle }, set: { app.setzeSchwelle($0) }),
-                         einheit: "lx", schritt: 1, bereich: 0...100_000)
-                ZahlFeld(titel: t("Abstand bis hell", "Gap until light"),
-                         hinweis: t("hell wieder ab \(app.hellAb.formatted(.number.precision(.fractionLength(0...1)))) lx",
-                                    "light again from \(app.hellAb.formatted(.number.precision(.fractionLength(0...1)))) lx"),
-                         wert: Binding(get: { app.abstand }, set: { app.setzeAbstand($0) }),
-                         einheit: "lx", schritt: 1, bereich: 0...100_000)
-                LabeledContent(t("Gerade dunkel genug?", "Dark enough right now?")) {
-                    Button(t("Als Grenze nehmen", "Use as limit")) { app.kalibrieren() }
-                        .disabled(Sensor.dienst == nil)
+                Toggle(t("Nach dem Umgebungslicht", "By ambient light"),
+                       isOn: Binding(get: { app.nachLicht }, set: { app.setzeNachLicht($0) }))
+                    .toggleStyle(.switch)
+                Group {
+                    ZahlFeld(titel: t("Dunkel unter", "Dark below"),
+                             wert: Binding(get: { app.schwelle }, set: { app.setzeSchwelle($0) }),
+                             einheit: "lx", schritt: 1, bereich: 0...100_000)
+                    ZahlFeld(titel: t("Abstand bis hell", "Gap until light"),
+                             hinweis: t("hell wieder ab \(app.hellAb.formatted(.number.precision(.fractionLength(0...1)))) lx",
+                                        "light again from \(app.hellAb.formatted(.number.precision(.fractionLength(0...1)))) lx"),
+                             wert: Binding(get: { app.abstand }, set: { app.setzeAbstand($0) }),
+                             einheit: "lx", schritt: 1, bereich: 0...100_000)
+                    LabeledContent(t("Gerade dunkel genug?", "Dark enough right now?")) {
+                        Button(t("Als Grenze nehmen", "Use as limit")) { app.kalibrieren() }
+                            .disabled(Sensor.dienst == nil)
+                    }
                 }
-                ZahlFeld(titel: t("Auch dunkel, wenn Bildschirm unter", "Also dark when screen below"),
-                         hinweis: app.helligkeitsGrenze == 0 ? t("0 % – der Bildschirm zählt nicht mit",
-                                                                 "0 % – the screen doesn't count") : nil,
-                         wert: Binding(get: { (app.helligkeitsGrenze * 100).rounded() },
-                                       set: { app.setzeHelligkeitsGrenze($0 / 100) }),
-                         einheit: "%", schritt: 1, bereich: 0...100, nachkomma: 0)
+                .disabled(!app.nachLicht)
             } header: {
-                Text(t("Grenze", "Threshold"))
+                Text(t("Umgebungslicht", "Ambient light"))
             } footer: {
                 Text(t("Hell wird es erst ab Dunkel-Grenze plus Abstand. Der Abstand verhindert, dass das Rauschen "
-                       + "des Sensors und das Licht des eigenen Bildschirms an der Grenze hin- und herschalten. Bei "
-                       + "offenem Fenster reagiert Dämmerung sofort, sonst schaut sie alle 20 s nach – eine geänderte "
-                       + "Bildschirmhelligkeit meldet macOS sofort.",
+                       + "des Sensors und das Licht des eigenen Bildschirms an der Grenze hin- und herschalten.",
                        "It turns light only from the dark limit plus the gap. The gap keeps sensor noise and the "
-                       + "screen's own light from flipping back and forth at the limit. With this window open "
-                       + "Dämmerung reacts instantly, otherwise it checks every 20 s – macOS reports brightness "
-                       + "changes right away."))
+                       + "screen's own light from flipping back and forth at the limit."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
+            Section {
+                Toggle(t("Nach der Bildschirmhelligkeit", "By screen brightness"),
+                       isOn: Binding(get: { app.nachHelligkeit }, set: { app.setzeNachHelligkeit($0) }))
+                    .toggleStyle(.switch)
+                ZahlFeld(titel: t("Dunkel unter", "Dark below"),
+                         wert: Binding(get: { (app.helligkeitsGrenze * 100).rounded() },
+                                       set: { app.setzeHelligkeitsGrenze($0 / 100) }),
+                         einheit: "%", schritt: 1, bereich: 1...100, nachkomma: 0)
+                    .disabled(!app.nachHelligkeit)
+            } header: {
+                Text(t("Bildschirmhelligkeit", "Screen brightness"))
+            } footer: {
+                Text(t("Dunkel wird es, sobald eins von beiden dunkel sagt. Bei offenem Fenster reagiert Dämmerung "
+                       + "sofort, sonst schaut sie alle 20 s nach – eine geänderte Bildschirmhelligkeit meldet macOS sofort.",
+                       "It turns dark as soon as either one says dark. With this window open Dämmerung reacts "
+                       + "instantly, otherwise it checks every 20 s – macOS reports brightness changes right away."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -808,37 +857,26 @@ func lichtfarbe(_ ton: (Double, Double, Double)?, _ deckkraft: Double = 1) -> Co
 
 let dunkelFarbe = 0x534AB7, mitteFarbe = 0xB4B2A9, hellFarbe = 0xFAC775
 
-/// Horizont oder Skala – ein Klick schaltet um, die Wahl bleibt gespeichert.
+/// Oben der Horizont, darunter zwei Balken in gleicher Optik: das Licht (Zeiger oben) und die
+/// Bildschirmhelligkeit (Zeiger unten). Ein abgeschalteter Weg ist ausgegraut.
 struct LichtGrafik: View {
     @ObservedObject var app: App
 
     var body: some View {
-        VStack(spacing: 8) {
-            Group {
-                if app.messung == nil {
-                    Text(t("Deckel zu – misst gerade nicht", "Lid closed – not measuring"))
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if app.weichLux == nil {
+        VStack(spacing: 12) {
+            if app.messung == nil {
+                Text(t("Deckel zu – misst gerade nicht", "Lid closed – not measuring"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 124)
+            } else {
+                if app.weichLux == nil {
                     Text(t("Lichtsensor nicht lesbar", "Light sensor not readable"))
                         .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if app.ansicht == 1 {
-                    Skala(app: app)
+                        .frame(maxWidth: .infinity, minHeight: 124)
                 } else {
-                    Horizont(app: app)
+                    Horizont(app: app).frame(height: 124)
                 }
-            }
-            .frame(height: 124)
-            .contentShape(Rectangle())
-            .onTapGesture { app.ansicht = (app.ansicht + 1) % 2 }
-            .help(t("Klicken: andere Darstellung", "Click for another view"))
-            HStack(spacing: 6) {
-                ForEach(0..<2, id: \.self) { i in
-                    Circle()
-                        .fill(i == app.ansicht ? Color.primary.opacity(0.7) : Color.secondary.opacity(0.3))
-                        .frame(width: 6, height: 6)
-                }
+                Balken(app: app).frame(height: 78)
             }
         }
         .padding(.vertical, 4)
@@ -918,83 +956,59 @@ struct Horizont: View {
     }
 }
 
-/// Logarithmische Skala von 0,1 bis 10.000 lx mit den eigenen Zonen und dem Zeiger.
-struct Skala: View {
+/// Zwei Balken in gleicher Optik. Oben das Licht auf einer logarithmischen Skala (0,1–10.000 lx) mit den
+/// Zonen dunkel · Abstand · hell, Zeiger von oben. Unten die Bildschirmhelligkeit (0–100 %) mit den Zonen
+/// dunkel · hell, Zeiger von unten, die Prozentzahl daran. Ohne Beschriftung – die Werte stehen im Horizont.
+struct Balken: View {
     @ObservedObject var app: App
 
     var body: some View {
         Canvas { ctx, size in
-            let l = app.weichLux ?? 0
-            let links = 24.0, breite = size.width - 48  // Platz für „10.000“ am Rand
-            func x(_ v: Double) -> Double { links + luxPosition(v) * breite }
-            let balken = CGRect(x: links, y: size.height / 2 + 2, width: breite, height: 16)
-            var zonen = ctx
-            zonen.clip(to: Path(roundedRect: balken, cornerRadius: 8))
-            for (von, bis, f) in [(links, x(app.schwelle), dunkelFarbe), (x(app.schwelle), x(app.hellAb), mitteFarbe),
-                                  (x(app.hellAb), links + breite, hellFarbe)] {
-                zonen.fill(Path(CGRect(x: von, y: balken.minY, width: bis - von, height: balken.height)), with: .color(farbe(f)))
-            }
-            for v in [0.1, 1, 10, 100, 1000, 10000] {
-                let px = x(v)
-                ctx.stroke(Path { $0.move(to: CGPoint(x: px, y: balken.maxY + 3)); $0.addLine(to: CGPoint(x: px, y: balken.maxY + 8)) },
-                           with: .color(.secondary), lineWidth: 1)
-                let text = v < 1 ? (Locale.current.decimalSeparator == "," ? "0,1" : "0.1")
-                    : NumberFormatter.localizedString(from: NSNumber(value: v), number: .decimal)
-                ctx.draw(Text(text).font(.system(size: 11)).foregroundColor(.secondary),
-                         at: CGPoint(x: px, y: balken.maxY + 18), anchor: .center)
-            }
-            let px = x(l)
-            ctx.fill(Path { $0.move(to: CGPoint(x: px - 7, y: balken.minY - 12)); $0.addLine(to: CGPoint(x: px + 7, y: balken.minY - 12))
-                $0.addLine(to: CGPoint(x: px, y: balken.minY - 2)); $0.closeSubpath() }, with: .color(.primary))
-            let rand = max(links + 40, min(links + breite - 40, px))
-            ctx.draw(Text("\(luxGenau(l)) · \(zone(l, app))").font(.system(size: 13, weight: .medium)).monospacedDigit(),
-                     at: CGPoint(x: rand, y: balken.minY - 26), anchor: .center)
-            // Lichtfarbe oben rechts, mit einem Punkt in genau dieser Farbe
-            if let k = app.weichKelvin {
-                let text = ctx.resolve(Text(lichtfarbeText(k)).font(.system(size: 11)).monospacedDigit()
-                                        .foregroundColor(.secondary))
-                let textBreite = text.measure(in: size).width
-                ctx.draw(text, at: CGPoint(x: links + breite, y: 9), anchor: .trailing)
-                if let punkt = lichtfarbe(app.weichFarbton) {
-                    ctx.fill(Path(ellipseIn: CGRect(x: links + breite - textBreite - 13, y: 4.5, width: 9, height: 9)),
-                             with: .color(punkt))
+            let links = 34.0, breite = size.width - 44, hoehe = 14.0
+            let oben = CGRect(x: links, y: 16, width: breite, height: hoehe)
+            let unten = CGRect(x: links, y: oben.maxY + 8, width: breite, height: hoehe)
+
+            func balken(_ rahmen: CGRect, _ zonen: [(Double, Double, Int)], an: Bool) {
+                var c = ctx
+                c.opacity = an ? 1 : 0.3
+                c.clip(to: Path(roundedRect: rahmen, cornerRadius: hoehe / 2))
+                for (von, bis, f) in zonen where bis > von {
+                    c.fill(Path(CGRect(x: rahmen.minX + von * rahmen.width, y: rahmen.minY,
+                                       width: (bis - von) * rahmen.width, height: rahmen.height)), with: .color(farbe(f)))
                 }
             }
-        }
-    }
-}
-
-/// Ein kleines MacBook, dessen Bildschirm so hell leuchtet wie eingestellt, mit der Prozentzahl darin.
-struct BildschirmZeile: View {
-    @ObservedObject var app: App
-
-    var body: some View {
-        let b = app.messung?.helligkeit.flatMap { _ in app.weichHelligkeit }
-        let grenze = app.helligkeitsGrenze
-        HStack(spacing: 14) {
-            Canvas { ctx, size in
-                let deckel = CGRect(x: 8, y: 2, width: size.width - 16, height: size.height - 10)
-                ctx.fill(Path(roundedRect: deckel, cornerRadius: 5), with: .color(farbe(0x3A3A3C)))
-                let schirm = deckel.insetBy(dx: 3.5, dy: 3.5)
-                ctx.fill(Path(roundedRect: schirm, cornerRadius: 2), with: .color(Color(white: 0.07 + (b ?? 0) * 0.9)))
-                ctx.fill(Path(roundedRect: CGRect(x: 0, y: size.height - 8, width: size.width, height: 5), cornerRadius: 2),
-                         with: .color(farbe(0x8E8E93)))
-                ctx.draw(Text(b.map { "\(Int(($0 * 100).rounded())) %" } ?? "–")
-                            .font(.system(size: 15, weight: .semibold)).monospacedDigit()
-                            .foregroundColor((b ?? 0) > 0.45 ? .black : .white),
-                         at: CGPoint(x: schirm.midX, y: schirm.midY), anchor: .center)
+            func symbol(_ name: String, _ mitte: Double, an: Bool) {
+                let bild = ctx.resolve(Image(systemName: name))
+                var c = ctx
+                c.opacity = an ? 0.75 : 0.3
+                c.draw(bild, in: CGRect(x: 4, y: mitte - 9, width: 18, height: 18))
             }
-            .frame(width: 96, height: 62)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(t("Bildschirmhelligkeit", "Screen brightness"))
-                Text(grenze == 0 ? t("zählt nicht mit", "doesn't count")
-                     : (app.messung?.helligkeit ?? 1) < grenze
-                        ? t("zählt gerade als dunkel (unter \(Int(grenze * 100)) %)",
-                            "counts as dark right now (below \(Int(grenze * 100)) %)")
-                        : t("unter \(Int(grenze * 100)) % zählt als dunkel", "below \(Int(grenze * 100)) % counts as dark"))
-                    .font(.callout).foregroundStyle(.secondary)
+
+            // Licht
+            let d = luxPosition(app.schwelle), h = luxPosition(app.hellAb)
+            balken(oben, [(0, d, dunkelFarbe), (d, h, mitteFarbe), (h, 1, hellFarbe)], an: app.nachLicht)
+            symbol("sun.max", oben.midY, an: app.nachLicht)
+            if let l = app.weichLux {
+                let x = oben.minX + luxPosition(l) * oben.width
+                var c = ctx
+                c.opacity = app.nachLicht ? 1 : 0.35
+                c.fill(Path { $0.move(to: CGPoint(x: x - 7, y: oben.minY - 12)); $0.addLine(to: CGPoint(x: x + 7, y: oben.minY - 12))
+                    $0.addLine(to: CGPoint(x: x, y: oben.minY - 2)); $0.closeSubpath() }, with: .color(.primary))
             }
-            Spacer()
+
+            // Bildschirmhelligkeit
+            let g = app.helligkeitsGrenze
+            balken(unten, [(0, g, dunkelFarbe), (g, 1, hellFarbe)], an: app.nachHelligkeit)
+            symbol("display", unten.midY, an: app.nachHelligkeit)
+            if let b = app.messung?.helligkeit.flatMap({ _ in app.weichHelligkeit }) {
+                let x = unten.minX + max(0, min(1, b)) * unten.width
+                var c = ctx
+                c.opacity = app.nachHelligkeit ? 1 : 0.35
+                c.fill(Path { $0.move(to: CGPoint(x: x - 7, y: unten.maxY + 12)); $0.addLine(to: CGPoint(x: x + 7, y: unten.maxY + 12))
+                    $0.addLine(to: CGPoint(x: x, y: unten.maxY + 2)); $0.closeSubpath() }, with: .color(.primary))
+                c.draw(Text("\(Int((b * 100).rounded())) %").font(.system(size: 11, weight: .medium)).monospacedDigit(),
+                       at: CGPoint(x: max(oben.minX + 14, min(oben.maxX - 14, x)), y: unten.maxY + 21), anchor: .center)
+            }
         }
     }
 }
