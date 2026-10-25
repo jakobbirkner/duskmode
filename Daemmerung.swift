@@ -5,28 +5,30 @@
 // Einstellungen: Dämmerung noch einmal öffnen (Spotlight, Programme-Ordner) – dann kommt ein
 // kleines Fenster, und solange es offen ist, steht die App auch im Dock. Fenster zu (⌘W) heißt
 // nicht beenden – die App läuft weiter; nur ⌘Q / „Beenden“ hört auf. Im Fenster: Automatik an/aus,
-// das Licht gerade (läuft sekündlich mit), die Grenze, „Gerade dunkel genug? Als Grenze nehmen“,
-// Autostart und auf Wunsch doch ein Symbol in der Menüleiste (Sonne am Horizont – kein Mond,
-// der sähe aus wie das Fokus-Symbol „Nicht stören“).
+// das Licht live (Horizont oder Skala, Klick schaltet um) mit Lichtfarbe, die Bildschirmhelligkeit
+// als kleines MacBook, die Grenzen, „Gerade dunkel genug? Als Grenze nehmen“, Autostart und auf
+// Wunsch doch ein Symbol in der Menüleiste (Sonne am Horizont – kein Mond, der sähe aus wie das
+// Fokus-Symbol „Nicht stören“).
 //
-// Gemessen wird mit dem Umgebungslichtsensor neben der Kamera (derselbe, der die
-// automatische Helligkeit steuert). Auf Wunsch zählt auch ein dunkel gestellter
-// Bildschirm als dunkel (Grenze einstellbar: 5–30 %, Standard 10 %).
+// Gemessen wird mit dem Umgebungslichtsensor neben der Kamera (derselbe, der die automatische
+// Helligkeit und True Tone steuert). Er ist ein Farbsensor – ein Messpunkt, kein Bild – und liefert
+// neben den Lux auch die Farbe des Lichts; daraus die Farbtemperatur (warm/neutral/kühl). Auf Wunsch
+// zählt auch ein dunkel gestellter Bildschirm als dunkel (Grenze 5–30 %, Standard 10 %).
 //
-// Ruhig: Gewechselt wird erst, wenn das Licht eine Weile auf der anderen Seite bleibt
-// (einstellbar: sofort, 5 s, 20 s, 1 min; Standard 5 s). Das ist nur gegen Hin-und-her,
-// wenn kurz etwas vor dem Sensor ist – mit Energie hat es nichts zu tun. Zurück ins Helle erst ab der dreifachen Schwelle – der Sensor sieht auch das Licht des
-// Bildschirms selbst (im dunklen Zimmer bei voller Helligkeit ca. 3 lx), ohne Abstand
-// würde er sich selbst hin- und herschalten. Stellt man das Erscheinungsbild von Hand
-// um, hält sich die App zurück, bis sich das Licht das nächste Mal wirklich ändert.
-// Ist der Deckel zu (nur externer Bildschirm), misst sie nicht.
+// Ohne Wartezeit: Sagt eine Messung „dunkel“ oder „hell“, wird umgeschaltet. Wie schnell, hängt nur
+// davon ab, wie oft nachgesehen wird (siehe „Sparsam“). Beim Licht bleibt ein Abstand – dunkel unter
+// der Schwelle, hell erst ab der dreifachen –, sonst schaltet das Rauschen des Sensors an der Grenze
+// hin und her, und der Sensor sieht auch das Licht des Bildschirms selbst (im dunklen Zimmer bei
+// voller Helligkeit ca. 3 lx). Die Bildschirmhelligkeit braucht keinen Abstand, sie schwankt nicht von
+// selbst. Stellt man das Erscheinungsbild von Hand um, hält sich die App zurück, bis sich das Licht
+// das nächste Mal wirklich ändert. Ist der Deckel zu (nur externer Bildschirm), misst sie nicht.
 //
-// Sparsam: Der Sensor läuft ohnehin (macOS liest ihn für Helligkeit und True Tone),
-// ein Blick darauf kostet rund 40 µs. Nachgesehen wird, wenn sich die Bildschirmhelligkeit
-// ändert (meldet macOS von selbst), nach dem Aufwachen und sonst alle 20 s – mit 10 s
-// Spielraum, damit macOS das bündeln kann (rund 4.300 Blicke am Tag, zusammen ca. 0,2 s
-// Rechenzeit). Ist der Bildschirm aus, wird gar nicht gemessen. Während ein Wechsel
-// ansteht, alle 5 s, und solange das Fenster offen ist, zehnmal pro Sekunde (Live-Grafik).
+// Sparsam: Der Sensor läuft ohnehin (macOS liest ihn für Helligkeit und True Tone), ein Blick darauf
+// kostet rund 40 µs. Bei offenem Fenster zehnmal pro Sekunde (Live-Grafik, sofortige Reaktion), sonst
+// alle 20 s mit 10 s Spielraum zum Bündeln (rund 4.300 Blicke am Tag, zusammen ca. 0,2 s Rechenzeit);
+// eine geänderte Bildschirmhelligkeit meldet macOS von selbst. Ist der Bildschirm aus, wird gar nicht
+// gemessen. Nach dem Aufklappen erst nach 5 s – vorher ist der Sensor noch verdeckt gewesen und die
+// Helligkeit blendet erst hoch (sonst wurde es kurz dunkel, 25.10.2026).
 //
 // macOS' eigenes „Erscheinungsbild: Automatisch“ (nach Uhrzeit) würde dazwischenfunken:
 // Solange die Automatik hier an ist, ist es aus; beim Ausschalten oder Beenden wieder an.
@@ -41,8 +43,6 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-let wartezeiten: [TimeInterval] = [0, 5, 20, 60]  // zur Auswahl: so lange muss das Licht auf der anderen Seite bleiben
-let standardWartezeit: TimeInterval = 5
 let schwellen: [Double] = [2, 5, 10, 20, 50, 100]
 let standardSchwelle = 10.0           // lx
 let helligkeitsGrenzen: [Double] = [0, 0.05, 0.10, 0.20, 0.30]  // zur Auswahl; 0 = Bildschirm zählt nie
@@ -60,6 +60,12 @@ func funktion<T>(_ rahmen: String, _ name: String, _: T.Type) -> T? {
 
 let privat = "/System/Library/PrivateFrameworks/"
 
+/// Was der Sensor auf einmal liefert: Lux und die Farbe des Lichts (CIE XYZ, Y = Leuchtdichte)
+struct Licht {
+    let lux: Double
+    let x: Double, y: Double, z: Double
+}
+
 enum Sensor {
     typealias Dienst = @convention(c) () -> OpaquePointer?
     typealias Ereignis = @convention(c) (OpaquePointer, Int64, Int32, Int64) -> Unmanaged<CFTypeRef>?
@@ -71,16 +77,17 @@ enum Sensor {
                                  "ALCALSCopyALSServiceClient", Dienst.self)?()
     static let umgebungslicht: Int64 = 12  // kIOHIDEventTypeAmbientLightSensor
 
-    /// Umgebungslicht in Lux. Der Sensor ist ein Farbsensor (ein Messpunkt, kein Bild): Feld 0 ist der
-    /// Lux-Wert in ganzen Zahlen, Feld 8 die Leuchtdichte Y aus seinen XYZ-Farbwerten – derselbe Wert
-    /// mit Nachkommastellen (14,9 statt 14). Für die Live-Anzeige zählt jede Kleinigkeit, darum Y.
-    static func lux() -> Double? {
+    /// Felder des Ereignisses: 0 Lux in ganzen Zahlen, 1–4 Rohkanäle, 7–9 X, Y, Z. Y ist derselbe Lux-Wert
+    /// mit Nachkommastellen (14,9 statt 14) – für die Live-Anzeige zählt jede Kleinigkeit, darum Y.
+    static func lesen() -> Licht? {
         guard let dienst, let ereignis, let feld,
               let e = ereignis(dienst, umgebungslicht, 0, 0)?.takeRetainedValue() else { return nil }
-        let ganz = feld(e, Int32(umgebungslicht << 16))
-        let fein = feld(e, Int32(umgebungslicht << 16 | 8))
-        return fein > 0 ? fein : ganz
+        func f(_ i: Int32) -> Double { feld(e, Int32(umgebungslicht << 16) | i) }
+        let y = f(8)
+        return Licht(lux: y > 0 ? y : f(0), x: f(7), y: y, z: f(9))
     }
+
+    static func lux() -> Double? { lesen()?.lux }
 }
 
 enum Bildschirm {
@@ -140,17 +147,37 @@ enum Erscheinung {
 }
 
 struct Messung {
-    let lux: Double?
+    let licht: Licht?
     let helligkeit: Double?
-}
+    var lux: Double? { licht?.lux }
 
-/// Ein Punkt im Verlauf (nur im Arbeitsspeicher, die letzten zwei Stunden)
-struct Punkt {
-    let zeit: Date
-    let lux: Double
-}
+    /// Farbtemperatur nach McCamy aus dem Farbort – eine Näherung, für warm/neutral/kühl genau genug.
+    /// Im fast Dunkeln ist die Farbe nicht messbar (alle Kanäle 0), dann nil.
+    var kelvin: Double? {
+        guard let l = licht, l.y > 0.5 else { return nil }
+        let summe: Double = l.x + l.y + l.z
+        let fx: Double = l.x / summe
+        let fy: Double = l.y / summe
+        let n: Double = (fx - 0.3320) / (0.1858 - fy)
+        let k: Double = 449 * n * n * n + 3525 * n * n + 6823.3 * n + 5520.33
+        return (1000...20000).contains(k) ? k : nil
+    }
 
-let verlaufsDauer: TimeInterval = 2 * 60 * 60
+    /// Die Farbe des Lichts in sRGB, der hellste Kanal auf 1 gesetzt (nur der Farbton, nicht die Helligkeit)
+    var farbton: (Double, Double, Double)? {
+        guard let l = licht, l.y > 0.5 else { return nil }
+        let r: Double = 3.2406 * l.x - 1.5372 * l.y - 0.4986 * l.z
+        let g: Double = -0.9689 * l.x + 1.8758 * l.y + 0.0415 * l.z
+        let b: Double = 0.0557 * l.x - 0.2040 * l.y + 1.0570 * l.z
+        let hoechster = max(r, g, b)
+        guard hoechster > 0 else { return nil }
+        func gamma(_ v: Double) -> Double {
+            let linear = max(0, v / hoechster)
+            return linear <= 0.0031308 ? 12.92 * linear : 1.055 * pow(linear, 1 / 2.4) - 0.055
+        }
+        return (gamma(r), gamma(g), gamma(b))
+    }
+}
 
 /// Lux auf einer logarithmischen Skala von 0,1 bis 10.000 lx, als 0…1
 func luxPosition(_ l: Double) -> Double { max(0, min(1, (log10(max(l, 0.1)) + 1) / 5)) }
@@ -177,11 +204,8 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     var mitlaufen: Timer?       // 10× pro Sekunde, solange das Fenster offen ist
     var takt: Timer?            // alle 20 s, solange der Bildschirm an ist
     var bald: Timer?            // kurz nach einer Helligkeitsänderung
-    var pruefTakt: Timer?       // alle 5 s, solange ein Wechsel ansteht
-    var kandidat: Bool?         // soll gleich dunkel (true) oder hell (false) werden …
-    var kandidatSeit = Date()   // … und das seit
     var aktivitaet: NSObjectProtocol?  // kein App Nap, solange der Bildschirm an ist
-    var wachSeit = Date.distantPast    // Bildschirm zuletzt angegangen
+    var ruhigBis = Date.distantPast    // kurz nach dem Aufklappen nicht entscheiden
     var angehalten = false      // von Hand umgestellt
     var sollBeimAnhalten: Bool?
     var eigeneAenderung = Date.distantPast
@@ -192,11 +216,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     var messung: Messung?       // fürs Fenster
     var weichLux: Double?       // geglättet, damit die Grafik fließt statt springt
     var weichHelligkeit: Double?
-    var verlauf: [Punkt] = []   // was ohnehin gemessen wird, zwei Stunden lang
-    var wechsel: [(zeit: Date, dunkel: Bool)] = []
-    var helligkeitDunkel: Bool? // stand die Helligkeit beim letzten Blick unter der Grenze?
-    var ansicht: Int {          // 0 Horizont, 1 Skala, 2 Verlauf – Klick auf die Grafik schaltet weiter
-        get { ablage.integer(forKey: "ansicht") }
+    var weichKelvin: Double?
+    var weichFarbton: (Double, Double, Double)?
+    var ansicht: Int {          // 0 Horizont, 1 Skala – Klick auf die Grafik schaltet um
+        get { ablage.integer(forKey: "ansicht") % 2 }
         set {
             ablage.set(newValue, forKey: "ansicht")
             objectWillChange.send()
@@ -221,11 +244,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         }
         set { ablage.set(newValue, forKey: "helligkeitsGrenze") }
     }
-    /// Nur gegen Hin-und-her-Schalten (Hand vor dem Sensor, kurzer Schatten), nicht wegen Energie.
-    var wartezeit: TimeInterval {
-        get { ablage.object(forKey: "wartezeit") as? Double ?? standardWartezeit }
-        set { ablage.set(newValue, forKey: "wartezeit") }
-    }
     var symbolZeigen: Bool {
         get { ablage.bool(forKey: "symbolZeigen") }
         set {
@@ -244,6 +262,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     func applicationDidFinishLaunching(_ n: Notification) {
         App.laufend = self
         NSApp.mainMenu = hauptmenue()
+        ablage.removeObject(forKey: "wartezeit")  // gab es bis 25.10.2026
 
         let arbeitsplatz = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
@@ -256,11 +275,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         DistributedNotificationCenter.default().addObserver(forName: themaMeldung, object: nil, queue: .main) {
             [weak self] _ in self?.erscheinungGeaendert()
         }
-        // Deckel auf/zu, Bildschirm an- oder abgesteckt
+        // Deckel auf/zu, Bildschirm an- oder abgesteckt – wie nach dem Aufwachen erst kurz warten
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             self?.beobachteHelligkeit()
-            self?.bewerte()
+            self?.gleichNachsehen()
         }
 
         let ersterStart = !ablage.bool(forKey: "autostartErledigt")
@@ -269,7 +288,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         symbolAnpassen()
         if automatik {
             uhrzeitAutomatikAus()
-            bewerte(sofort: true)
+            bewerte(frisch: true)
         }
         starteTakt()
         if ersterStart || !alsAnmeldeobjekt { zeigeEinstellungen() }
@@ -303,11 +322,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     /// Beim Ziehen am Regler kommen viele Meldungen – nachgesehen wird einmal, kurz danach.
     func helligkeitGeaendert() {
         guard automatik, bald == nil else { return }
-        let einmal = Timer(timeInterval: 2, repeats: false) { [weak self] _ in
+        let einmal = Timer(timeInterval: 0.5, repeats: false) { [weak self] _ in
             self?.bald = nil
             self?.bewerte()
         }
-        einmal.tolerance = 1
+        einmal.tolerance = 0.2
         RunLoop.main.add(einmal, forMode: .common)
         bald = einmal
     }
@@ -336,112 +355,62 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         }
         bald?.invalidate()
         bald = nil
-        kandidatBeenden()
     }
 
-    /// Nach dem Aufwachen zügig passend umschalten (siehe `geradeAufgewacht`).
     func aufgewacht() {
         starteTakt()
-        wachSeit = Date()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.bewerte() }
+        gleichNachsehen()
     }
 
-    /// Kurz nach dem Aufklappen sind die Werte noch nicht verlässlich: Der Sensor war verdeckt und
-    /// die Helligkeit blendet erst von 0 hoch. Sofort umgeschaltet, wurde es kurz dunkel (25.10.2026).
-    /// Darum dann die Helligkeit nicht mitzählen und eine zweite Messung abwarten – nur kürzer als sonst.
-    var geradeAufgewacht: Bool { -wachSeit.timeIntervalSinceNow < 15 }
+    /// Nach dem Aufklappen sind die Werte kurz unzuverlässig: Der Sensor war verdeckt, die Helligkeit
+    /// blendet erst von 0 hoch. Darum 5 s lang nicht entscheiden, dann frisch an der Mitte.
+    func gleichNachsehen() {
+        ruhigBis = Date().addingTimeInterval(5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.1) { [weak self] in self?.bewerte(frisch: true) }
+    }
 
     // MARK: Entscheiden
 
     func messen() -> Messung? {
         guard let id = Bildschirm.eingebaut() else { return nil }  // zugeklappt: Sensor verdeckt
-        return Messung(lux: Sensor.lux(), helligkeit: Bildschirm.helligkeit(id))
+        return Messung(licht: Sensor.lesen(), helligkeit: Bildschirm.helligkeit(id))
     }
 
     /// true = dunkel, false = hell, nil = dazwischen (bleibt, wie es ist)
     func soll(_ m: Messung) -> Bool? {
-        let hell = geradeAufgewacht ? 1 : m.helligkeit ?? 1
-        let schwach = hell < helligkeitsGrenze
+        let schwach = (m.helligkeit ?? 1) < helligkeitsGrenze
         guard let l = m.lux else { return schwach ? true : nil }
         if l < schwelle || schwach { return true }
-        if l >= hellAb && !(helligkeitsGrenze > 0 && hell < helligkeitsGrenze + 0.05) { return false }
+        if l >= hellAb { return false }
         return nil
     }
 
-    func bewerte(sofort: Bool = false) {
-        defer { anzeigen() }
-        let gemessen = messen()
-        if let gemessen { merke(gemessen) }
-        guard automatik, let m = gemessen else {
-            kandidatBeenden()
-            return
-        }
-        // Hat die Helligkeit gerade die Grenze gekreuzt? Die schwankt nicht zufällig (von Hand gestellt
-        // oder von macOS schon geglättet) – dann gilt keine Wartezeit. Mit demselben Abstand wie in soll().
-        var helligkeitGekippt = false
-        if let h = m.helligkeit, helligkeitsGrenze > 0, !geradeAufgewacht {
-            let unter = h < helligkeitsGrenze ? true : h >= helligkeitsGrenze + 0.05 ? false : helligkeitDunkel
-            helligkeitGekippt = helligkeitDunkel != nil && unter != helligkeitDunkel
-            helligkeitDunkel = unter
-        }
+    func bewerte(frisch: Bool = false) {
+        entscheide(messen(), frisch: frisch)
+        anzeigen()
+    }
+
+    /// Ohne Wartezeit: Sagt die Messung „dunkel“ oder „hell“, wird gleich umgeschaltet.
+    /// `frisch`: beim Start oder Aufwachen gibt es keinen eigenen letzten Stand, den der Abstand schützen
+    /// müsste (macOS hat beim Beenden vielleicht selbst umgestellt) – dann im Zwischenbereich an der Mitte.
+    func entscheide(_ gemessen: Messung?, frisch: Bool = false) {
+        guard automatik, let m = gemessen, Date() >= ruhigBis,
+              -eigeneAenderung.timeIntervalSinceNow > 1 else { return }  // eben erst umgeschaltet
         var s = soll(m)
-        // Beim Start oder Aufwachen gibt es keinen eigenen letzten Stand, den der Abstand schützen
-        // müsste (macOS hat beim Beenden vielleicht selbst umgestellt) – dann an der Mitte entscheiden.
-        if s == nil && (sofort || geradeAufgewacht), let l = m.lux { s = l < (schwelle + hellAb) / 2 }
+        if s == nil && frisch, let l = m.lux { s = l < (schwelle + hellAb) / 2 }
         if angehalten {
             // Pause endet, sobald sich das Licht wirklich ändert
-            guard let s, s != sollBeimAnhalten else {
-                kandidatBeenden()
-                return
-            }
+            guard let s, s != sollBeimAnhalten else { return }
             angehalten = false
         }
-        guard let s, s != Erscheinung.dunkel else {
-            kandidatBeenden()
-            return
-        }
-        // nach dem Aufwachen höchstens 4 s: eine zweite Messung reicht als Bestätigung
-        let warten = geradeAufgewacht ? min(4, wartezeit) : wartezeit
-        if sofort || warten == 0 || helligkeitGekippt
-            || (kandidat == s && -kandidatSeit.timeIntervalSinceNow >= warten - 0.5) {
-            umschalten(dunkel: s)
-        } else if kandidat != s {
-            kandidat = s
-            kandidatSeit = Date()
-            let neu = Timer(timeInterval: min(5, warten), repeats: true) { [weak self] _ in self?.bewerte() }
-            neu.tolerance = 1
-            RunLoop.main.add(neu, forMode: .common)
-            pruefTakt?.invalidate()
-            pruefTakt = neu
-        }
-    }
-
-    func kandidatBeenden() {
-        pruefTakt?.invalidate()
-        pruefTakt = nil
-        kandidat = nil
-    }
-
-    /// Für den Verlauf: höchstens ein Punkt alle 2 s, nichts älter als zwei Stunden. Gemessen wird dafür
-    /// nicht extra – das sind die Messungen, die ohnehin anfallen (bei offenem Fenster die Live-Werte).
-    func merke(_ m: Messung) {
-        guard let l = m.lux else { return }
-        let jetzt = Date()
-        if let letzter = verlauf.last, jetzt.timeIntervalSince(letzter.zeit) < 2 { return }
-        verlauf.append(Punkt(zeit: jetzt, lux: l))
-        let grenze = jetzt.addingTimeInterval(-verlaufsDauer)
-        if let erster = verlauf.first, erster.zeit < grenze {
-            verlauf.removeAll { $0.zeit < grenze }
-            wechsel.removeAll { $0.zeit < grenze }
-        }
+        guard let s, s != Erscheinung.dunkel else { return }
+        umschalten(dunkel: s)
     }
 
     func umschalten(dunkel: Bool) {
-        kandidatBeenden()
         eigeneAenderung = Date()
         Erscheinung.setze(dunkel: dunkel)
         zuletzt = (dunkel, Date())
-        wechsel.append((Date(), dunkel))
     }
 
     /// Kam die Änderung nicht von hier, hat jemand von Hand umgestellt.
@@ -450,7 +419,6 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         guard automatik, -eigeneAenderung.timeIntervalSinceNow > 5 else { return }
         angehalten = true
         sollBeimAnhalten = messen().flatMap(soll)
-        kandidatBeenden()
     }
 
     // MARK: macOS-Automatik nach Uhrzeit
@@ -476,9 +444,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         angehalten = false
         if an {
             uhrzeitAutomatikAus()
-            bewerte(sofort: true)
+            eigeneAenderung = .distantPast  // gleich entscheiden, nicht erst in einer Sekunde
+            bewerte(frisch: true)
         } else {
-            kandidatBeenden()
             uhrzeitAutomatikZurueck()
             anzeigen()
         }
@@ -495,18 +463,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         guard let l = Sensor.lux() else { return }
         schwelle = max(2, (l * 1.25).rounded(.up) + 1)
         angehalten = false
-        bewerte(sofort: true)
+        bewerte(frisch: true)
     }
 
     func setzeHelligkeitsGrenze(_ wert: Double) {
         helligkeitsGrenze = wert
         angehalten = false
-        bewerte()
-    }
-
-    func setzeWartezeit(_ wert: TimeInterval) {
-        wartezeit = wert
-        kandidatBeenden()  // neu anfangen, mit der neuen Zeit
         bewerte()
     }
 
@@ -520,23 +482,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
 
     // MARK: Anzeige
 
-    /// Fenster und (falls gewünscht) Symbol auf den neuen Stand bringen.
+    /// Fenster und (falls gewünscht) Symbol auf den neuen Stand bringen. Bei offenem Fenster läuft das
+    /// zehnmal pro Sekunde – dann wird auch gleich entschieden, also sofort umgeschaltet.
     func anzeigen() {
         if fenster?.isVisible == true {
             let m = messen()
             messung = m
-            if let m { merke(m) }
-            // Der Sensor liefert etwa alle 0,4 s einen neuen Wert; dazwischen gleitet die Anzeige hin
-            // (Lux auf der logarithmischen Skala, sonst springt sie im Dunkeln).
-            if let l = m?.lux {
-                let ziel = max(l, 0.05)
-                weichLux = weichLux.map { $0 * pow(ziel / max($0, 0.05), 0.3) } ?? ziel
-            } else {
-                weichLux = nil
-            }
-            if let h = m?.helligkeit {
-                weichHelligkeit = weichHelligkeit.map { $0 + (h - $0) * 0.3 } ?? h
-            }
+            entscheide(m)
+            glaetten(m)
             objectWillChange.send()
         }
         guard let knopf = eintrag?.button else { return }
@@ -550,6 +503,25 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         knopf.image = bild
         knopf.appearsDisabled = !automatik || angehalten
         knopf.toolTip = "Dämmerung – " + zustandText()
+    }
+
+    /// Der Sensor liefert etwa alle 0,4 s einen neuen Wert; dazwischen gleitet die Anzeige hin
+    /// (Lux auf der logarithmischen Skala, sonst springt sie im Dunkeln).
+    func glaetten(_ m: Messung?) {
+        func hin(_ alt: Double?, _ neu: Double) -> Double { alt.map { $0 + (neu - $0) * 0.3 } ?? neu }
+        if let l = m?.lux {
+            let ziel = max(l, 0.05)
+            weichLux = weichLux.map { $0 * pow(ziel / max($0, 0.05), 0.3) } ?? ziel
+        } else {
+            weichLux = nil
+        }
+        if let h = m?.helligkeit { weichHelligkeit = hin(weichHelligkeit, h) }
+        if let k = m?.kelvin { weichKelvin = hin(weichKelvin, k) } else { weichKelvin = nil }
+        if let ton = m?.farbton {
+            weichFarbton = (hin(weichFarbton?.0, ton.0), hin(weichFarbton?.1, ton.1), hin(weichFarbton?.2, ton.2))
+        } else {
+            weichFarbton = nil
+        }
     }
 
     func symbolAnpassen() {
@@ -576,14 +548,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
             return t("Pausiert, weil von Hand umgestellt – bis sich das Licht ändert",
                      "Paused because you switched by hand – until the light changes")
         }
-        if let kandidat {
-            let rest = max(1, Int((wartezeit + kandidatSeit.timeIntervalSinceNow).rounded(.up)))
-            return kandidat ? t("Wird in \(rest) s dunkel", "Turning dark in \(rest) s")
-                            : t("Wird in \(rest) s hell", "Turning light in \(rest) s")
-        }
         let jetzt = Erscheinung.dunkel ? t("Gerade dunkel", "Dark right now") : t("Gerade hell", "Light right now")
-        guard let zuletzt, zuletzt.dunkel == Erscheinung.dunkel else { return jetzt }
-        return jetzt + t(", seit \(uhrzeit(zuletzt.zeit))", " since \(uhrzeit(zuletzt.zeit))")
+        // warum – damit klar ist, ob das Licht oder der Bildschirm entschieden hat
+        var grund = ""
+        if let m = messung, Erscheinung.dunkel {
+            if (m.helligkeit ?? 1) < helligkeitsGrenze && (m.lux ?? 0) >= schwelle {
+                grund = t(" – wegen der Bildschirmhelligkeit", " – because of the screen brightness")
+            } else if let l = m.lux, l >= schwelle, l < hellAb {
+                grund = t(" – hell wird es erst ab \(lux(hellAb))", " – turns light from \(lux(hellAb))")
+            }
+        }
+        guard let zuletzt, zuletzt.dunkel == Erscheinung.dunkel else { return jetzt + grund }
+        return jetzt + t(", seit \(uhrzeit(zuletzt.zeit))", " since \(uhrzeit(zuletzt.zeit))") + grund
     }
 
     /// Solange das Fenster offen ist, steht die App im Dock und hat ein eigenes Menü.
@@ -683,17 +659,15 @@ struct Einstellungen: View {
                             .tag(wert)
                     }
                 }
-                Picker(t("Wechseln nach", "Switch after"),
-                       selection: Binding(get: { app.wartezeit }, set: { app.setzeWartezeit($0) })) {
-                    ForEach(warteAuswahl, id: \.self) { Text(dauer($0)).tag($0) }
-                }
             } header: {
                 Text(t("Grenze", "Threshold"))
             } footer: {
-                Text(t("Die Wartezeit verhindert Hin-und-her, wenn kurz etwas vor dem Sensor ist. Ins Helle erst "
-                       + "deutlich heller, weil der Sensor auch das Licht des Bildschirms sieht.",
-                       "The delay prevents flip-flopping when something briefly covers the sensor. Back to light only "
-                       + "when clearly brighter, because the sensor also sees the screen's own light."))
+                Text(t("Bei offenem Fenster reagiert Dämmerung sofort, sonst schaut sie alle 20 s nach – eine "
+                       + "geänderte Bildschirmhelligkeit meldet macOS sofort. Ins Helle erst ab der höheren Grenze, "
+                       + "weil der Sensor auch das Licht des Bildschirms sieht.",
+                       "With this window open Dämmerung reacts instantly, otherwise it checks every 20 s – macOS "
+                       + "reports brightness changes right away. Back to light only from the higher limit, because "
+                       + "the sensor also sees the screen's own light."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -747,15 +721,8 @@ struct Einstellungen: View {
         helligkeitsGrenzen.contains(app.helligkeitsGrenze) ? helligkeitsGrenzen
             : (helligkeitsGrenzen + [app.helligkeitsGrenze]).sorted()
     }
-    var warteAuswahl: [TimeInterval] {
-        wartezeiten.contains(app.wartezeit) ? wartezeiten : (wartezeiten + [app.wartezeit]).sorted()
-    }
 
     func prozent(_ wert: Double) -> String { "\(Int((wert * 100).rounded())) %" }
-
-    func dauer(_ s: TimeInterval) -> String {
-        s == 0 ? t("sofort", "immediately") : s < 60 ? "\(Int(s)) s" : "\(Int(s / 60)) min"
-    }
 
     var fehlt: String {
         [Sensor.dienst == nil ? t("Lichtsensor", "light sensor") : nil,
@@ -786,9 +753,20 @@ func zone(_ l: Double, _ app: App) -> String {
     l < app.schwelle ? t("dunkel", "dark") : l >= app.hellAb ? t("hell", "light") : t("dazwischen", "in between")
 }
 
+/// „2.800 K · warm“ – auf 50 K gerundet, mehr gibt die Näherung nicht her
+func lichtfarbeText(_ k: Double) -> String {
+    let gerundet = NumberFormatter.localizedString(from: NSNumber(value: (k / 50).rounded() * 50), number: .decimal)
+    let art = k < 3300 ? t("warm", "warm") : k < 5000 ? t("neutral", "neutral") : t("kühl", "cool")
+    return "\(gerundet) K · \(art)"
+}
+
+func lichtfarbe(_ ton: (Double, Double, Double)?, _ deckkraft: Double = 1) -> Color? {
+    ton.map { Color(.sRGB, red: $0.0, green: $0.1, blue: $0.2, opacity: deckkraft) }
+}
+
 let dunkelFarbe = 0x534AB7, mitteFarbe = 0xB4B2A9, hellFarbe = 0xFAC775
 
-/// Horizont, Skala oder Verlauf – ein Klick schaltet weiter, die Wahl bleibt gespeichert.
+/// Horizont oder Skala – ein Klick schaltet um, die Wahl bleibt gespeichert.
 struct LichtGrafik: View {
     @ObservedObject var app: App
 
@@ -805,18 +783,16 @@ struct LichtGrafik: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if app.ansicht == 1 {
                     Skala(app: app)
-                } else if app.ansicht == 2 {
-                    Verlauf(app: app)
                 } else {
                     Horizont(app: app)
                 }
             }
             .frame(height: 124)
             .contentShape(Rectangle())
-            .onTapGesture { app.ansicht = (app.ansicht + 1) % 3 }
+            .onTapGesture { app.ansicht = (app.ansicht + 1) % 2 }
             .help(t("Klicken: andere Darstellung", "Click for another view"))
             HStack(spacing: 6) {
-                ForEach(0..<3, id: \.self) { i in
+                ForEach(0..<2, id: \.self) { i in
                     Circle()
                         .fill(i == app.ansicht ? Color.primary.opacity(0.7) : Color.secondary.opacity(0.3))
                         .frame(width: 6, height: 6)
@@ -828,6 +804,7 @@ struct LichtGrafik: View {
 }
 
 /// Ein kleiner Himmel: je heller, desto höher die Sonne; im Dunkeln Mond und Sterne.
+/// Die Sonne leuchtet in der gemessenen Lichtfarbe – warmes Licht gibt eine orange Sonne.
 struct Horizont: View {
     @ObservedObject var app: App
     static let sterne: [(Double, Double)] = [(0.07, 0.18), (0.2, 0.42), (0.33, 0.12), (0.47, 0.32), (0.6, 0.1),
@@ -873,16 +850,28 @@ struct Horizont: View {
                     .subtracting(Path(ellipseIn: CGRect(x: x - r + 7, y: y - r - 4, width: 2 * r, height: 2 * r)))
                 ctx.fill(mond, with: .color(farbe(0xF1EFE8)))
             } else {
+                let sonne = lichtfarbe(app.weichFarbton) ?? farbe(0xFFC94D)
+                let schein = lichtfarbe(app.weichFarbton, 0.55) ?? farbe(0xFFD98A, 0.55)
                 ctx.fill(Path(ellipseIn: CGRect(x: x - 34, y: y - 34, width: 68, height: 68)),
-                         with: .radialGradient(Gradient(colors: [farbe(0xFFD98A, 0.55), farbe(0xFFD98A, 0)]),
+                         with: .radialGradient(Gradient(colors: [schein, schein.opacity(0)]),
                                                center: CGPoint(x: x, y: y), startRadius: 8, endRadius: 34))
-                ctx.fill(Path(ellipseIn: CGRect(x: x - 13, y: y - 13, width: 26, height: 26)), with: .color(farbe(0xFFC94D)))
+                ctx.fill(Path(ellipseIn: CGRect(x: x - 13, y: y - 13, width: 26, height: 26)), with: .color(sonne))
             }
             ctx.fill(Path(CGRect(x: 0, y: boden, width: size.width, height: size.height - boden)),
                      with: .color(farbe(0x1F1E1C, 0.92)))
             ctx.draw(Text("\(luxGenau(l)) · \(zone(l, app))").font(.system(size: 12, weight: .medium)).monospacedDigit()
                         .foregroundColor(.white),
                      at: CGPoint(x: 12, y: boden + 15), anchor: .leading)
+            if let k = app.weichKelvin {
+                let text = ctx.resolve(Text(lichtfarbeText(k)).font(.system(size: 12)).monospacedDigit()
+                                        .foregroundColor(.white.opacity(0.85)))
+                let breite = text.measure(in: size).width
+                ctx.draw(text, at: CGPoint(x: size.width - 12, y: boden + 15), anchor: .trailing)
+                if let punkt = lichtfarbe(app.weichFarbton) {
+                    ctx.fill(Path(ellipseIn: CGRect(x: size.width - 12 - breite - 14, y: boden + 10, width: 9, height: 9)),
+                             with: .color(punkt))
+                }
+            }
         }
     }
 }
@@ -896,7 +885,7 @@ struct Skala: View {
             let l = app.weichLux ?? 0
             let links = 24.0, breite = size.width - 48  // Platz für „10.000“ am Rand
             func x(_ v: Double) -> Double { links + luxPosition(v) * breite }
-            let balken = CGRect(x: links, y: size.height / 2 - 2, width: breite, height: 16)
+            let balken = CGRect(x: links, y: size.height / 2 + 2, width: breite, height: 16)
             var zonen = ctx
             zonen.clip(to: Path(roundedRect: balken, cornerRadius: 8))
             for (von, bis, f) in [(links, x(app.schwelle), dunkelFarbe), (x(app.schwelle), x(app.hellAb), mitteFarbe),
@@ -918,63 +907,17 @@ struct Skala: View {
             let rand = max(links + 40, min(links + breite - 40, px))
             ctx.draw(Text("\(luxGenau(l)) · \(zone(l, app))").font(.system(size: 13, weight: .medium)).monospacedDigit(),
                      at: CGPoint(x: rand, y: balken.minY - 26), anchor: .center)
-        }
-    }
-}
-
-/// Die letzten zwei Stunden: was ohnehin gemessen wurde, bei offenem Fenster live am rechten Ende.
-struct Verlauf: View {
-    @ObservedObject var app: App
-
-    var body: some View {
-        Canvas { ctx, size in
-            let jetzt = Date()
-            var punkte = app.verlauf
-            if let l = app.weichLux { punkte.append(Punkt(zeit: jetzt, lux: l)) }
-            guard punkte.count >= 2, let erster = punkte.first else { return }
-            let start = max(erster.zeit, jetzt.addingTimeInterval(-verlaufsDauer))
-            let spanne = max(1, jetzt.timeIntervalSince(start))  // immer über die volle Breite, auch kurz nach dem Start
-            let flaeche = CGRect(x: 8, y: 22, width: size.width - 52, height: size.height - 44)
-            let werte = punkte.map(\.lux)
-            let unten = log10(max(0.05, min(werte.min() ?? 1, app.schwelle) / 1.6))
-            let oben = log10(max(werte.max() ?? 1, app.hellAb) * 1.6)
-            func px(_ d: Date) -> Double { flaeche.minX + max(0, d.timeIntervalSince(start)) / spanne * flaeche.width }
-            func py(_ v: Double) -> Double {
-                flaeche.maxY - (log10(max(v, 0.05)) - unten) / max(0.01, oben - unten) * flaeche.height
+            // Lichtfarbe oben rechts, mit einem Punkt in genau dieser Farbe
+            if let k = app.weichKelvin {
+                let text = ctx.resolve(Text(lichtfarbeText(k)).font(.system(size: 11)).monospacedDigit()
+                                        .foregroundColor(.secondary))
+                let textBreite = text.measure(in: size).width
+                ctx.draw(text, at: CGPoint(x: links + breite, y: 9), anchor: .trailing)
+                if let punkt = lichtfarbe(app.weichFarbton) {
+                    ctx.fill(Path(ellipseIn: CGRect(x: links + breite - textBreite - 13, y: 4.5, width: 9, height: 9)),
+                             with: .color(punkt))
+                }
             }
-            for (v, f) in [(app.schwelle, dunkelFarbe), (app.hellAb, 0xBA7517)] {
-                let y = py(v)
-                ctx.stroke(Path { $0.move(to: CGPoint(x: flaeche.minX, y: y)); $0.addLine(to: CGPoint(x: flaeche.maxX, y: y)) },
-                           with: .color(farbe(f)), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
-                ctx.draw(Text(lux(v)).font(.system(size: 11)).foregroundColor(farbe(f)),
-                         at: CGPoint(x: flaeche.maxX + 6, y: y), anchor: .leading)
-            }
-            for w in app.wechsel where w.zeit >= start {
-                let x = px(w.zeit)
-                ctx.stroke(Path { $0.move(to: CGPoint(x: x, y: flaeche.minY)); $0.addLine(to: CGPoint(x: x, y: flaeche.maxY)) },
-                           with: .color(.secondary.opacity(0.35)), lineWidth: 1)
-                ctx.fill(Path(ellipseIn: CGRect(x: x - 4, y: flaeche.minY - 10, width: 8, height: 8)),
-                         with: .color(farbe(w.dunkel ? dunkelFarbe : 0xEF9F27)))
-            }
-            // Lücken (Bildschirm aus, zugeklappt) nicht verbinden
-            var linie = Path()
-            var vorher: Date?
-            for p in punkte where p.zeit >= start {
-                let punkt = CGPoint(x: px(p.zeit), y: py(p.lux))
-                if let v = vorher, p.zeit.timeIntervalSince(v) < 90 { linie.addLine(to: punkt) } else { linie.move(to: punkt) }
-                vorher = p.zeit
-            }
-            ctx.stroke(linie, with: .color(farbe(0x1D9E75)), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            if let l = app.weichLux {
-                ctx.fill(Path(ellipseIn: CGRect(x: px(jetzt) - 3.5, y: py(l) - 3.5, width: 7, height: 7)), with: .color(farbe(0x1D9E75)))
-                ctx.draw(Text("\(luxGenau(l)) · \(zone(l, app))").font(.system(size: 12, weight: .medium)).monospacedDigit(),
-                         at: CGPoint(x: flaeche.minX, y: 6), anchor: .leading)
-            }
-            let anfang = spanne > verlaufsDauer - 60 ? t("vor 2 h", "2 h ago") : t("seit \(uhrzeit(start))", "since \(uhrzeit(start))")
-            ctx.draw(Text(anfang).font(.system(size: 11)).foregroundColor(.secondary),
-                     at: CGPoint(x: flaeche.minX, y: size.height - 8), anchor: .leading)
-            ctx.draw(Text(t("jetzt", "now")).font(.system(size: 11)).foregroundColor(.secondary),
-                     at: CGPoint(x: flaeche.maxX, y: size.height - 8), anchor: .trailing)
         }
     }
 }
@@ -1003,9 +946,10 @@ struct BildschirmZeile: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(t("Bildschirmhelligkeit", "Screen brightness"))
                 Text(grenze == 0 ? t("zählt nicht mit", "doesn't count")
-                     : (b ?? 1) < grenze ? t("zählt gerade als dunkel (unter \(Int(grenze * 100)) %)",
-                                             "counts as dark right now (below \(Int(grenze * 100)) %)")
-                     : t("unter \(Int(grenze * 100)) % zählt als dunkel", "below \(Int(grenze * 100)) % counts as dark"))
+                     : (app.messung?.helligkeit ?? 1) < grenze
+                        ? t("zählt gerade als dunkel (unter \(Int(grenze * 100)) %)",
+                            "counts as dark right now (below \(Int(grenze * 100)) %)")
+                        : t("unter \(Int(grenze * 100)) % zählt als dunkel", "below \(Int(grenze * 100)) % counts as dark"))
                     .font(.callout).foregroundStyle(.secondary)
             }
             Spacer()
