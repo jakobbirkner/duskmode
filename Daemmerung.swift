@@ -6,18 +6,19 @@
 // kleines Fenster, und solange es offen ist, steht die App auch im Dock. Fenster zu (⌘W) heißt
 // nicht beenden – die App läuft weiter; nur ⌘Q / „Beenden“ hört auf. Im Fenster: Automatik an/aus,
 // das Licht live (Horizont oder Skala, Klick schaltet um) mit Lichtfarbe, die Bildschirmhelligkeit
-// als kleines MacBook, die Grenzen, „Gerade dunkel genug? Als Grenze nehmen“, Autostart und auf
+// als kleines MacBook, die Grenzen als freie Zahlen mit Plus/Minus (Dunkel unter, Abstand bis hell,
+// Bildschirm unter), „Gerade dunkel genug? Als Grenze nehmen“, Autostart und auf
 // Wunsch doch ein Symbol in der Menüleiste (Sonne am Horizont – kein Mond, der sähe aus wie das
 // Fokus-Symbol „Nicht stören“).
 //
 // Gemessen wird mit dem Umgebungslichtsensor neben der Kamera (derselbe, der die automatische
 // Helligkeit und True Tone steuert). Er ist ein Farbsensor – ein Messpunkt, kein Bild – und liefert
 // neben den Lux auch die Farbe des Lichts; daraus die Farbtemperatur (warm/neutral/kühl). Auf Wunsch
-// zählt auch ein dunkel gestellter Bildschirm als dunkel (Grenze 5–30 %, Standard 10 %).
+// zählt auch ein dunkel gestellter Bildschirm als dunkel (Grenze frei in %, Standard 10 %).
 //
 // Ohne Wartezeit: Sagt eine Messung „dunkel“ oder „hell“, wird umgeschaltet. Wie schnell, hängt nur
 // davon ab, wie oft nachgesehen wird (siehe „Sparsam“). Beim Licht bleibt ein Abstand – dunkel unter
-// der Schwelle, hell erst ab der dreifachen –, sonst schaltet das Rauschen des Sensors an der Grenze
+// der Schwelle, hell erst ab Schwelle plus Abstand (einstellbar) –, sonst schaltet das Rauschen an der Grenze
 // hin und her, und der Sensor sieht auch das Licht des Bildschirms selbst (im dunklen Zimmer bei
 // voller Helligkeit ca. 3 lx). Die Bildschirmhelligkeit braucht keinen Abstand, sie schwankt nicht von
 // selbst. Stellt man das Erscheinungsbild von Hand um, hält sich die App zurück, bis sich das Licht
@@ -43,9 +44,7 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-let schwellen: [Double] = [2, 5, 10, 20, 50, 100]
 let standardSchwelle = 10.0           // lx
-let helligkeitsGrenzen: [Double] = [0, 0.05, 0.10, 0.20, 0.30]  // zur Auswahl; 0 = Bildschirm zählt nie
 let themaMeldung = Notification.Name("AppleInterfaceThemeChangedNotification")
 
 let deutsch = Locale.preferredLanguages.first?.hasPrefix("de") ?? false
@@ -235,7 +234,13 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         get { ablage.object(forKey: "schwelle") as? Double ?? standardSchwelle }
         set { ablage.set(newValue, forKey: "schwelle") }
     }
-    var hellAb: Double { max(schwelle * 3, schwelle + 5) }
+    /// So viel heller als die Dunkel-Grenze muss es sein, damit es wieder hell wird. Frei einstellbar;
+    /// solange nicht gesetzt, wie bis 25.10.2026: dreifache Schwelle, mindestens 5 lx mehr.
+    var abstand: Double {
+        get { ablage.object(forKey: "abstand") as? Double ?? max(schwelle * 2, 5) }
+        set { ablage.set(max(0, newValue), forKey: "abstand") }
+    }
+    var hellAb: Double { schwelle + abstand }
     /// Darunter zählt auch der Bildschirm als dunkel (0 = nie). Bis 25.10.2026 nur an/aus bei 10 %.
     var helligkeitsGrenze: Double {
         get {
@@ -453,21 +458,35 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     }
 
     func setzeSchwelle(_ wert: Double) {
-        schwelle = wert
+        abstandFesthalten()
+        schwelle = max(0, wert)
         angehalten = false
         bewerte()
+    }
+
+    func setzeAbstand(_ wert: Double) {
+        abstand = wert
+        angehalten = false
+        bewerte()
+    }
+
+    /// Der Abstand hing bis 25.10.2026 an der Schwelle. Wer die Schwelle verstellt, soll den Abstand
+    /// behalten, den er gerade sieht – nicht plötzlich einen anderen.
+    func abstandFesthalten() {
+        if ablage.object(forKey: "abstand") == nil { abstand = abstand }
     }
 
     /// Das Licht gerade soll schon als dunkel zählen: Grenze knapp darüber.
     func kalibrieren() {
         guard let l = Sensor.lux() else { return }
+        abstandFesthalten()
         schwelle = max(2, (l * 1.25).rounded(.up) + 1)
         angehalten = false
         bewerte(frisch: true)
     }
 
     func setzeHelligkeitsGrenze(_ wert: Double) {
-        helligkeitsGrenze = wert
+        helligkeitsGrenze = max(0, min(1, wert))
         angehalten = false
         bewerte()
     }
@@ -643,31 +662,35 @@ struct Einstellungen: View {
             }
 
             Section {
-                Picker(t("Dunkel unter", "Dark below"),
-                       selection: Binding(get: { app.schwelle }, set: { app.setzeSchwelle($0) })) {
-                    ForEach(auswahl, id: \.self) { Text(lux($0)).tag($0) }
-                }
-                LabeledContent(t("Hell wieder ab", "Light again from"), value: lux(app.hellAb))
+                ZahlFeld(titel: t("Dunkel unter", "Dark below"),
+                         wert: Binding(get: { app.schwelle }, set: { app.setzeSchwelle($0) }),
+                         einheit: "lx", schritt: 1, bereich: 0...100_000)
+                ZahlFeld(titel: t("Abstand bis hell", "Gap until light"),
+                         hinweis: t("hell wieder ab \(app.hellAb.formatted(.number.precision(.fractionLength(0...1)))) lx",
+                                    "light again from \(app.hellAb.formatted(.number.precision(.fractionLength(0...1)))) lx"),
+                         wert: Binding(get: { app.abstand }, set: { app.setzeAbstand($0) }),
+                         einheit: "lx", schritt: 1, bereich: 0...100_000)
                 LabeledContent(t("Gerade dunkel genug?", "Dark enough right now?")) {
                     Button(t("Als Grenze nehmen", "Use as limit")) { app.kalibrieren() }
                         .disabled(Sensor.dienst == nil)
                 }
-                Picker(t("Auch dunkel, wenn Bildschirm", "Also dark when screen is"),
-                       selection: Binding(get: { app.helligkeitsGrenze }, set: { app.setzeHelligkeitsGrenze($0) })) {
-                    ForEach(helligkeitsAuswahl, id: \.self) { wert in
-                        Text(wert == 0 ? t("nie", "never") : t("unter \(prozent(wert))", "below \(prozent(wert))"))
-                            .tag(wert)
-                    }
-                }
+                ZahlFeld(titel: t("Auch dunkel, wenn Bildschirm unter", "Also dark when screen below"),
+                         hinweis: app.helligkeitsGrenze == 0 ? t("0 % – der Bildschirm zählt nicht mit",
+                                                                 "0 % – the screen doesn't count") : nil,
+                         wert: Binding(get: { (app.helligkeitsGrenze * 100).rounded() },
+                                       set: { app.setzeHelligkeitsGrenze($0 / 100) }),
+                         einheit: "%", schritt: 1, bereich: 0...100, nachkomma: 0)
             } header: {
                 Text(t("Grenze", "Threshold"))
             } footer: {
-                Text(t("Bei offenem Fenster reagiert Dämmerung sofort, sonst schaut sie alle 20 s nach – eine "
-                       + "geänderte Bildschirmhelligkeit meldet macOS sofort. Ins Helle erst ab der höheren Grenze, "
-                       + "weil der Sensor auch das Licht des Bildschirms sieht.",
-                       "With this window open Dämmerung reacts instantly, otherwise it checks every 20 s – macOS "
-                       + "reports brightness changes right away. Back to light only from the higher limit, because "
-                       + "the sensor also sees the screen's own light."))
+                Text(t("Hell wird es erst ab Dunkel-Grenze plus Abstand. Der Abstand verhindert, dass das Rauschen "
+                       + "des Sensors und das Licht des eigenen Bildschirms an der Grenze hin- und herschalten. Bei "
+                       + "offenem Fenster reagiert Dämmerung sofort, sonst schaut sie alle 20 s nach – eine geänderte "
+                       + "Bildschirmhelligkeit meldet macOS sofort.",
+                       "It turns light only from the dark limit plus the gap. The gap keeps sensor noise and the "
+                       + "screen's own light from flipping back and forth at the limit. With this window open "
+                       + "Dämmerung reacts instantly, otherwise it checks every 20 s – macOS reports brightness "
+                       + "changes right away."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -714,21 +737,40 @@ struct Einstellungen: View {
         .frame(width: 480, height: 720)
     }
 
-    var auswahl: [Double] { schwellen.contains(app.schwelle) ? schwellen : (schwellen + [app.schwelle]).sorted() }
-
-    // von Hand gesetzte Werte (defaults write) trotzdem anzeigen
-    var helligkeitsAuswahl: [Double] {
-        helligkeitsGrenzen.contains(app.helligkeitsGrenze) ? helligkeitsGrenzen
-            : (helligkeitsGrenzen + [app.helligkeitsGrenze]).sorted()
-    }
-
-    func prozent(_ wert: Double) -> String { "\(Int((wert * 100).rounded())) %" }
-
     var fehlt: String {
         [Sensor.dienst == nil ? t("Lichtsensor", "light sensor") : nil,
          Bildschirm.lesen == nil ? t("Helligkeit", "brightness") : nil,
          Erscheinung.setzen == nil ? t("direktes Umschalten (nutzt Systemereignisse)", "direct switching (uses System Events)") : nil]
             .compactMap { $0 }.joined(separator: ", ")
+    }
+}
+
+/// Frei einstellbare Zahl: zum Eintippen (Enter oder Weiterklicken übernimmt) und mit Plus/Minus.
+struct ZahlFeld: View {
+    let titel: String
+    var hinweis: String? = nil
+    let wert: Binding<Double>
+    let einheit: String
+    let schritt: Double
+    let bereich: ClosedRange<Double>
+    var nachkomma = 1
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 6) {
+                TextField("", value: wert, format: .number.precision(.fractionLength(0...nachkomma)))
+                    .labelsHidden()
+                    .multilineTextAlignment(.trailing)
+                    .frame(width: 70)
+                Text(einheit).foregroundStyle(.secondary)
+                Stepper("", value: wert, in: bereich, step: schritt).labelsHidden()
+            }
+        } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(titel)
+                if let hinweis { Text(hinweis).font(.callout).foregroundStyle(.secondary) }
+            }
+        }
     }
 }
 
