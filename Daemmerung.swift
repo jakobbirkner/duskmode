@@ -10,11 +10,12 @@
 // der sähe aus wie das Fokus-Symbol „Nicht stören“).
 //
 // Gemessen wird mit dem Umgebungslichtsensor neben der Kamera (derselbe, der die
-// automatische Helligkeit steuert). Auf Wunsch zählt auch ein sehr dunkel gestellter
-// Bildschirm (unter 10 %) als dunkel.
+// automatische Helligkeit steuert). Auf Wunsch zählt auch ein dunkel gestellter
+// Bildschirm als dunkel (Grenze einstellbar: 5–30 %, Standard 10 %).
 //
-// Ruhig: Gewechselt wird erst, wenn das Licht 20 s lang auf der anderen Seite bleibt.
-// Zurück ins Helle erst ab der dreifachen Schwelle – der Sensor sieht auch das Licht des
+// Ruhig: Gewechselt wird erst, wenn das Licht eine Weile auf der anderen Seite bleibt
+// (einstellbar: sofort, 5 s, 20 s, 1 min; Standard 5 s). Das ist nur gegen Hin-und-her,
+// wenn kurz etwas vor dem Sensor ist – mit Energie hat es nichts zu tun. Zurück ins Helle erst ab der dreifachen Schwelle – der Sensor sieht auch das Licht des
 // Bildschirms selbst (im dunklen Zimmer bei voller Helligkeit ca. 3 lx), ohne Abstand
 // würde er sich selbst hin- und herschalten. Stellt man das Erscheinungsbild von Hand
 // um, hält sich die App zurück, bis sich das Licht das nächste Mal wirklich ändert.
@@ -22,9 +23,10 @@
 //
 // Sparsam: Der Sensor läuft ohnehin (macOS liest ihn für Helligkeit und True Tone),
 // ein Blick darauf kostet rund 40 µs. Nachgesehen wird, wenn sich die Bildschirmhelligkeit
-// ändert (meldet macOS von selbst), nach dem Aufwachen und sonst einmal pro Minute – mit
-// Spielraum, damit macOS das bündeln kann. Ist der Bildschirm aus, wird gar nicht gemessen.
-// Nur während ein Wechsel ansteht, alle 5 s, und solange das Fenster offen ist, jede Sekunde.
+// ändert (meldet macOS von selbst), nach dem Aufwachen und sonst alle 20 s – mit 10 s
+// Spielraum, damit macOS das bündeln kann (rund 4.300 Blicke am Tag, zusammen ca. 0,2 s
+// Rechenzeit). Ist der Bildschirm aus, wird gar nicht gemessen. Während ein Wechsel
+// ansteht, alle 5 s, und solange das Fenster offen ist, jede Sekunde.
 //
 // macOS' eigenes „Erscheinungsbild: Automatisch“ (nach Uhrzeit) würde dazwischenfunken:
 // Solange die Automatik hier an ist, ist es aus; beim Ausschalten oder Beenden wieder an.
@@ -39,10 +41,11 @@ import AppKit
 import ServiceManagement
 import SwiftUI
 
-let wartezeit: TimeInterval = 20      // so lange muss das Licht auf der anderen Seite bleiben
+let wartezeiten: [TimeInterval] = [0, 5, 20, 60]  // zur Auswahl: so lange muss das Licht auf der anderen Seite bleiben
+let standardWartezeit: TimeInterval = 5
 let schwellen: [Double] = [2, 5, 10, 20, 50, 100]
 let standardSchwelle = 10.0           // lx
-let dunklerBildschirm = 0.10          // darunter gilt der Bildschirm als sehr dunkel
+let helligkeitsGrenzen: [Double] = [0, 0.05, 0.10, 0.20, 0.30]  // zur Auswahl; 0 = Bildschirm zählt nie
 let themaMeldung = Notification.Name("AppleInterfaceThemeChangedNotification")
 
 let deutsch = Locale.preferredLanguages.first?.hasPrefix("de") ?? false
@@ -157,7 +160,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     var eintrag: NSStatusItem?  // nur, wenn in den Einstellungen gewünscht
     var fenster: NSWindow?
     var mitlaufen: Timer?       // jede Sekunde, solange das Fenster offen ist
-    var takt: Timer?            // einmal pro Minute, solange der Bildschirm an ist
+    var takt: Timer?            // alle 20 s, solange der Bildschirm an ist
     var bald: Timer?            // kurz nach einer Helligkeitsänderung
     var pruefTakt: Timer?       // alle 5 s, solange ein Wechsel ansteht
     var kandidat: Bool?         // soll gleich dunkel (true) oder hell (false) werden …
@@ -183,9 +186,18 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         set { ablage.set(newValue, forKey: "schwelle") }
     }
     var hellAb: Double { max(schwelle * 3, schwelle + 5) }
-    var auchHelligkeit: Bool {
-        get { ablage.object(forKey: "auchHelligkeit") as? Bool ?? true }
-        set { ablage.set(newValue, forKey: "auchHelligkeit") }
+    /// Darunter zählt auch der Bildschirm als dunkel (0 = nie). Bis 25.10.2026 nur an/aus bei 10 %.
+    var helligkeitsGrenze: Double {
+        get {
+            if let wert = ablage.object(forKey: "helligkeitsGrenze") as? Double { return wert }
+            return ablage.object(forKey: "auchHelligkeit") as? Bool == false ? 0 : 0.10
+        }
+        set { ablage.set(newValue, forKey: "helligkeitsGrenze") }
+    }
+    /// Nur gegen Hin-und-her-Schalten (Hand vor dem Sensor, kurzer Schatten), nicht wegen Energie.
+    var wartezeit: TimeInterval {
+        get { ablage.object(forKey: "wartezeit") as? Double ?? standardWartezeit }
+        set { ablage.set(newValue, forKey: "wartezeit") }
     }
     var symbolZeigen: Bool {
         get { ablage.bool(forKey: "symbolZeigen") }
@@ -273,17 +285,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         bald = einmal
     }
 
-    /// Ohne sichtbares Fenster bremst macOS die App sonst aus (App Nap): Der Minutentakt kam dann
-    /// erst nach mehreren Minuten (25.10.2026). Der Spielraum von 30 s zum Bündeln bleibt.
+    /// Ohne sichtbares Fenster bremst macOS die App sonst aus (App Nap): Der Takt kam dann
+    /// erst nach mehreren Minuten (25.10.2026). Der Spielraum zum Bündeln bleibt.
     func starteTakt() {
         guard takt == nil else { return }
-        let neu = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.bewerte() }
-        neu.tolerance = 30
+        let neu = Timer(timeInterval: 20, repeats: true) { [weak self] _ in self?.bewerte() }
+        neu.tolerance = 10
         RunLoop.main.add(neu, forMode: .common)
         takt = neu
         if aktivitaet == nil {
             aktivitaet = ProcessInfo.processInfo.beginActivity(
-                options: .userInitiatedAllowingIdleSystemSleep, reason: "Licht einmal pro Minute prüfen")
+                options: .userInitiatedAllowingIdleSystemSleep, reason: "Licht alle 20 s prüfen")
         }
     }
 
@@ -300,7 +312,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         kandidatBeenden()
     }
 
-    /// Nach dem Aufwachen gleich passend umschalten, ohne die 20 s abzuwarten.
+    /// Nach dem Aufwachen zügig passend umschalten (siehe `geradeAufgewacht`).
     func aufgewacht() {
         starteTakt()
         wachSeit = Date()
@@ -322,10 +334,10 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     /// true = dunkel, false = hell, nil = dazwischen (bleibt, wie es ist)
     func soll(_ m: Messung) -> Bool? {
         let hell = geradeAufgewacht ? 1 : m.helligkeit ?? 1
-        let schwach = auchHelligkeit && hell < dunklerBildschirm
+        let schwach = hell < helligkeitsGrenze
         guard let l = m.lux else { return schwach ? true : nil }
         if l < schwelle || schwach { return true }
-        if l >= hellAb && !(auchHelligkeit && hell < dunklerBildschirm + 0.05) { return false }
+        if l >= hellAb && !(helligkeitsGrenze > 0 && hell < helligkeitsGrenze + 0.05) { return false }
         return nil
     }
 
@@ -351,13 +363,14 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
             kandidatBeenden()
             return
         }
-        let warten = geradeAufgewacht ? 4 : wartezeit  // nach dem Aufwachen reicht die Bestätigung 5 s später
-        if sofort || (kandidat == s && -kandidatSeit.timeIntervalSinceNow >= warten) {
+        // nach dem Aufwachen höchstens 4 s: eine zweite Messung reicht als Bestätigung
+        let warten = geradeAufgewacht ? min(4, wartezeit) : wartezeit
+        if sofort || warten == 0 || (kandidat == s && -kandidatSeit.timeIntervalSinceNow >= warten - 0.5) {
             umschalten(dunkel: s)
         } else if kandidat != s {
             kandidat = s
             kandidatSeit = Date()
-            let neu = Timer(timeInterval: 5, repeats: true) { [weak self] _ in self?.bewerte() }
+            let neu = Timer(timeInterval: min(5, warten), repeats: true) { [weak self] _ in self?.bewerte() }
             neu.tolerance = 1
             RunLoop.main.add(neu, forMode: .common)
             pruefTakt?.invalidate()
@@ -432,8 +445,15 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         bewerte(sofort: true)
     }
 
-    func setzeAuchHelligkeit(_ an: Bool) {
-        auchHelligkeit = an
+    func setzeHelligkeitsGrenze(_ wert: Double) {
+        helligkeitsGrenze = wert
+        angehalten = false
+        bewerte()
+    }
+
+    func setzeWartezeit(_ wert: TimeInterval) {
+        wartezeit = wert
+        kandidatBeenden()  // neu anfangen, mit der neuen Zeit
         bewerte()
     }
 
@@ -585,16 +605,24 @@ struct Einstellungen: View {
                     Button(t("Als Grenze nehmen", "Use as limit")) { app.kalibrieren() }
                         .disabled(Sensor.dienst == nil)
                 }
-                Toggle(t("Auch bei sehr dunklem Bildschirm (unter \(Int(dunklerBildschirm * 100)) %)",
-                         "Also when the screen is very dim (below \(Int(dunklerBildschirm * 100)) %)"),
-                       isOn: Binding(get: { app.auchHelligkeit }, set: { app.setzeAuchHelligkeit($0) }))
+                Picker(t("Auch dunkel, wenn Bildschirm", "Also dark when screen is"),
+                       selection: Binding(get: { app.helligkeitsGrenze }, set: { app.setzeHelligkeitsGrenze($0) })) {
+                    ForEach(helligkeitsAuswahl, id: \.self) { wert in
+                        Text(wert == 0 ? t("nie", "never") : t("unter \(prozent(wert))", "below \(prozent(wert))"))
+                            .tag(wert)
+                    }
+                }
+                Picker(t("Wechseln nach", "Switch after"),
+                       selection: Binding(get: { app.wartezeit }, set: { app.setzeWartezeit($0) })) {
+                    ForEach(warteAuswahl, id: \.self) { Text(dauer($0)).tag($0) }
+                }
             } header: {
                 Text(t("Grenze", "Threshold"))
             } footer: {
-                Text(t("Gewechselt wird, wenn das Licht 20 s auf der anderen Seite bleibt. Ins Helle erst deutlich "
-                       + "heller, weil der Sensor auch das Licht des Bildschirms sieht.",
-                       "Switches once the light stays on the other side for 20 s. Back to light only when clearly "
-                       + "brighter, because the sensor also sees the screen's own light."))
+                Text(t("Die Wartezeit verhindert Hin-und-her, wenn kurz etwas vor dem Sensor ist. Ins Helle erst "
+                       + "deutlich heller, weil der Sensor auch das Licht des Bildschirms sieht.",
+                       "The delay prevents flip-flopping when something briefly covers the sensor. Back to light only "
+                       + "when clearly brighter, because the sensor also sees the screen's own light."))
                     .font(.caption).foregroundStyle(.secondary)
             }
 
@@ -642,6 +670,21 @@ struct Einstellungen: View {
     }
 
     var auswahl: [Double] { schwellen.contains(app.schwelle) ? schwellen : (schwellen + [app.schwelle]).sorted() }
+
+    // von Hand gesetzte Werte (defaults write) trotzdem anzeigen
+    var helligkeitsAuswahl: [Double] {
+        helligkeitsGrenzen.contains(app.helligkeitsGrenze) ? helligkeitsGrenzen
+            : (helligkeitsGrenzen + [app.helligkeitsGrenze]).sorted()
+    }
+    var warteAuswahl: [TimeInterval] {
+        wartezeiten.contains(app.wartezeit) ? wartezeiten : (wartezeiten + [app.wartezeit]).sorted()
+    }
+
+    func prozent(_ wert: Double) -> String { "\(Int((wert * 100).rounded())) %" }
+
+    func dauer(_ s: TimeInterval) -> String {
+        s == 0 ? t("sofort", "immediately") : s < 60 ? "\(Int(s)) s" : "\(Int(s / 60)) min"
+    }
 
     var lichtText: String {
         guard let m = app.messung else { return t("Deckel zu – misst nicht", "Lid closed – not measuring") }
