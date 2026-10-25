@@ -1,8 +1,8 @@
-// Dämmerung – läuft unsichtbar im Hintergrund: Wird es um den Mac herum dunkel, geht macOS
-// in den Dark Mode, wird es wieder hell, zurück ins helle Erscheinungsbild.
+// Duskmode (bis 26.10.2026 „Dämmerung“) – läuft unsichtbar im Hintergrund: Wird es um den Mac herum
+// dunkel, geht macOS in den Dark Mode, wird es wieder hell, zurück ins helle Erscheinungsbild.
 //
 // Kein Symbol in der Menüleiste (dort ist der Platz knapp, und verstellt wird selten).
-// Einstellungen: Dämmerung noch einmal öffnen (Spotlight, Programme-Ordner) – dann kommt ein
+// Einstellungen: Duskmode noch einmal öffnen (Spotlight, Programme-Ordner) – dann kommt ein
 // kleines Fenster, und solange es offen ist, steht die App auch im Dock. Fenster zu (⌘W) heißt
 // nicht beenden – die App läuft weiter; nur ⌘Q / „Beenden“ hört auf. Im Fenster: Automatik an/aus,
 // live der Horizont (mit Lichtfarbe) und darunter zwei Balken für Licht und Bildschirmhelligkeit,
@@ -191,8 +191,9 @@ func uhrzeit(_ datum: Date) -> String {
     DateFormatter.localizedString(from: datum, dateStyle: .none, timeStyle: .short)
 }
 
+/// Mit Komma oder Punkt je nach Region, eine Nachkommastelle nur, wenn sie etwas sagt
 func lux(_ wert: Double) -> String {
-    wert < 10 && wert != wert.rounded() ? String(format: "%.1f lx", wert) : "\(Int(wert.rounded())) lx"
+    wert.formatted(.number.precision(.fractionLength(0...(wert < 10 ? 1 : 0)))) + " lx"
 }
 
 final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableObject {
@@ -275,6 +276,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         App.laufend = self
         NSApp.mainMenu = hauptmenue()
         ablage.removeObject(forKey: "wartezeit")  // gab es bis 25.10.2026
+        alteEinstellungenUebernehmen()
 
         let arbeitsplatz = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.screensDidWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
@@ -306,13 +308,25 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         if ersterStart || !alsAnmeldeobjekt { zeigeEinstellungen() }
     }
 
-    /// Dämmerung läuft schon und wird noch einmal geöffnet: Einstellungen zeigen.
+    /// Duskmode läuft schon und wird noch einmal geöffnet: Einstellungen zeigen.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
         zeigeEinstellungen()
         return false
     }
 
     func applicationWillTerminate(_ n: Notification) { uhrzeitAutomatikZurueck() }
+
+    /// Bis 26.10.2026 hieß die App „Dämmerung“ (eigene Einstellungs-Domain): die Grenzen und Schalter
+    /// einmal von dort übernehmen. Nicht „uhrzeitWarAn“ – das hat die alte App beim Beenden selbst erledigt.
+    func alteEinstellungenUebernehmen() {
+        guard !ablage.bool(forKey: "altUebernommen") else { return }
+        ablage.set(true, forKey: "altUebernommen")
+        guard let alt = ablage.persistentDomain(forName: "local.programmentwicklung.daemmerung") else { return }
+        for schluessel in ["automatik", "schwelle", "abstand", "helligkeitsGrenze", "nachLicht", "nachHelligkeit",
+                           "auchHelligkeit", "symbolZeigen"] {
+            if let wert = alt[schluessel] { ablage.set(wert, forKey: schluessel) }
+        }
+    }
 
     /// Nur beim allerersten Start: als Anmeldeobjekt eintragen. Wer es danach wieder
     /// ausschaltet, wird nicht überstimmt.
@@ -547,12 +561,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         guard stand != gezeichnet else { return }  // nur neu zeichnen, wenn sich etwas ändert
         gezeichnet = stand
         let bild = NSImage(systemSymbolName: automatik ? "sun.horizon.fill" : "sun.horizon",
-                           accessibilityDescription: "Dämmerung")?
+                           accessibilityDescription: "Duskmode")?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
         bild?.isTemplate = true
         knopf.image = bild
         knopf.appearsDisabled = !automatik || angehalten
-        knopf.toolTip = "Dämmerung – " + zustandText()
+        knopf.toolTip = "Duskmode – " + zustandText()
     }
 
     /// Der Sensor liefert etwa alle 0,4 s einen neuen Wert; dazwischen gleitet die Anzeige hin
@@ -620,7 +634,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     @objc func zeigeEinstellungen() {
         if fenster == nil {
             let f = NSWindow(contentViewController: NSHostingController(rootView: Einstellungen(app: self)))
-            f.title = "Dämmerung"
+            f.title = "Duskmode"
             f.styleMask = [.titled, .closable, .miniaturizable]
             f.isReleasedWhenClosed = false
             f.delegate = self
@@ -640,6 +654,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         DispatchQueue.main.async { [weak self] in
             NSApp.activate(ignoringOtherApps: true)
             self?.fenster?.makeKeyAndOrderFront(nil)
+            self?.fenster?.makeFirstResponder(nil)  // sonst ist beim Öffnen das erste Zahlenfeld markiert
         }
         if mitlaufen == nil {
             // nur bei offenem Fenster so oft: ein Blick kostet 40 µs, das Zeichnen etwas mehr
@@ -660,7 +675,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     func hauptmenue() -> NSMenu {
         let leiste = NSMenu()
         let appMenue = NSMenu()
-        appMenue.addItem(withTitle: t("Dämmerung beenden", "Quit Dämmerung"),
+        appMenue.addItem(withTitle: t("Duskmode beenden", "Quit Duskmode"),
                          action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let fensterMenue = NSMenu(title: t("Fenster", "Window"))
         fensterMenue.addItem(withTitle: t("Schließen", "Close"), action: #selector(NSWindow.performClose(_:)),
@@ -736,9 +751,9 @@ struct Einstellungen: View {
             } header: {
                 Text(t("Bildschirmhelligkeit", "Screen brightness"))
             } footer: {
-                Text(t("Dunkel wird es, sobald eins von beiden dunkel sagt. Bei offenem Fenster reagiert Dämmerung "
+                Text(t("Dunkel wird es, sobald eins von beiden dunkel sagt. Bei offenem Fenster reagiert Duskmode "
                        + "sofort, sonst schaut sie alle 20 s nach – eine geänderte Bildschirmhelligkeit meldet macOS sofort.",
-                       "It turns dark as soon as either one says dark. With this window open Dämmerung reacts "
+                       "It turns dark as soon as either one says dark. With this window open Duskmode reacts "
                        + "instantly, otherwise it checks every 20 s – macOS reports brightness changes right away."))
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -756,7 +771,7 @@ struct Einstellungen: View {
             // darum steht hier ausdrücklich, was welches tut.
             Section {
                 LabeledContent(t("Fenster schließen (⌘W)", "Close window (⌘W)")) {
-                    Text(t("Dämmerung läuft unsichtbar weiter", "Dämmerung keeps running invisibly"))
+                    Text(t("Duskmode läuft unsichtbar weiter", "Duskmode keeps running invisibly"))
                 }
                 LabeledContent {
                     Button(t("Beenden", "Quit")) { NSApp.terminate(nil) }
@@ -766,8 +781,8 @@ struct Einstellungen: View {
                         Text(app.autostart
                              ? t("Schaltet nichts mehr um bis zum nächsten Anmelden",
                                  "Stops switching until you next log in")
-                             : t("Schaltet nichts mehr um, bis du Dämmerung wieder öffnest",
-                                 "Stops switching until you open Dämmerung again"))
+                             : t("Schaltet nichts mehr um, bis du Duskmode wieder öffnest",
+                                 "Stops switching until you open Duskmode again"))
                             .font(.callout).foregroundStyle(.secondary)
                     }
                 }
@@ -775,8 +790,8 @@ struct Einstellungen: View {
                 Text(t("Im Hintergrund", "In the background"))
             } footer: {
                 Text(fehlt.isEmpty
-                     ? t("Zurück zu diesen Einstellungen: Dämmerung noch einmal öffnen (Spotlight, Programme).",
-                         "To get back here: open Dämmerung again (Spotlight, Applications).")
+                     ? t("Zurück zu diesen Einstellungen: Duskmode noch einmal öffnen (Spotlight, Programme).",
+                         "To get back here: open Duskmode again (Spotlight, Applications).")
                      : t("Nicht verfügbar: ", "Not available: ") + fehlt)
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -926,6 +941,7 @@ struct Horizont: View {
             let y = boden + 6 - sin(p * .pi / 2) * (boden - 18)
             if l < app.schwelle || p < 0.3 {
                 let r = 12.0
+                let y = min(y, boden - 26)  // der Mond steht immer ganz über dem Horizont
                 let mond = Path(ellipseIn: CGRect(x: x - r, y: y - r, width: 2 * r, height: 2 * r))
                     .subtracting(Path(ellipseIn: CGRect(x: x - r + 7, y: y - r - 4, width: 2 * r, height: 2 * r)))
                 ctx.fill(mond, with: .color(farbe(0xF1EFE8)))
