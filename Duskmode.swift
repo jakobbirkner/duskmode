@@ -48,6 +48,20 @@ import SwiftUI
 let standardSchwelle = 10.0           // lx
 let themaMeldung = Notification.Name("AppleInterfaceThemeChangedNotification")
 
+/// Vorführmodus für Screenshots (README): `open -n Duskmode.app --args -demo day` oder `-demo night`.
+/// Zeigt feste, typische Werte statt der Messung und das Fenster hell bzw. dunkel – schaltet aber nichts
+/// am Mac um: kein Erscheinungsbild, keine Uhrzeit-Automatik, kein Autostart, kein Takt.
+let vorfuehrung = UserDefaults.standard.string(forKey: "demo")
+var vorfuehrungTag: Bool { vorfuehrung != "night" }
+
+/// Ein Nachmittag am Schreibtisch (320 lx, warmes Licht, 3.200 K) bzw. abends bei einer Lampe (0,8 lx, 2.700 K).
+/// XYZ aus dem Farbort des schwarzen Strahlers bei dieser Farbtemperatur, Y = Lux.
+func vorfuehrungsMessung() -> Messung {
+    vorfuehrungTag
+        ? Messung(licht: Licht(lux: 320, x: 339.6, y: 320, z: 142.4), helligkeit: 0.65)
+        : Messung(licht: Licht(lux: 0.8, x: 0.896, y: 0.8, z: 0.252), helligkeit: 0.18)
+}
+
 let deutsch = Locale.preferredLanguages.first?.hasPrefix("de") ?? false
 func t(_ de: String, _ en: String) -> String { deutsch ? de : en }
 
@@ -274,6 +288,12 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
 
     func applicationDidFinishLaunching(_ n: Notification) {
         App.laufend = self
+        if vorfuehrung != nil {
+            NSApp.appearance = NSAppearance(named: vorfuehrungTag ? .aqua : .darkAqua)
+            NSApp.mainMenu = hauptmenue()
+            zeigeEinstellungen()
+            return  // sonst nichts: kein Takt, kein Autostart, keine Uhrzeit-Automatik
+        }
         NSApp.mainMenu = hauptmenue()
         ablage.removeObject(forKey: "wartezeit")  // gab es bis 25.10.2026
         alteEinstellungenUebernehmen()
@@ -314,7 +334,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         return false
     }
 
-    func applicationWillTerminate(_ n: Notification) { uhrzeitAutomatikZurueck() }
+    func applicationWillTerminate(_ n: Notification) {
+        if vorfuehrung == nil { uhrzeitAutomatikZurueck() }
+    }
 
     /// Bis 26.10.2026 hieß die App „Dämmerung“ (eigene Einstellungs-Domain): die Grenzen und Schalter
     /// einmal von dort übernehmen. Nicht „uhrzeitWarAn“ – das hat die alte App beim Beenden selbst erledigt.
@@ -398,6 +420,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     // MARK: Entscheiden
 
     func messen() -> Messung? {
+        if vorfuehrung != nil { return vorfuehrungsMessung() }
         guard let id = Bildschirm.eingebaut() else { return nil }  // zugeklappt: Sensor verdeckt
         return Messung(licht: Sensor.lesen(), helligkeit: Bildschirm.helligkeit(id))
     }
@@ -432,7 +455,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     /// `frisch`: beim Start oder Aufwachen gibt es keinen eigenen letzten Stand, den der Abstand schützen
     /// müsste (macOS hat beim Beenden vielleicht selbst umgestellt) – dann im Zwischenbereich an der Mitte.
     func entscheide(_ gemessen: Messung?, frisch: Bool = false) {
-        guard automatik, let m = gemessen, Date() >= ruhigBis,
+        guard automatik, vorfuehrung == nil, let m = gemessen, Date() >= ruhigBis,
               -eigeneAenderung.timeIntervalSinceNow > 1 else { return }  // eben erst umgeschaltet
         var s = soll(m)
         if s == nil && frisch && nachLicht, let l = m.lux { s = l < (schwelle + hellAb) / 2 }
@@ -454,7 +477,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     /// Kam die Änderung nicht von hier, hat jemand von Hand umgestellt.
     func erscheinungGeaendert() {
         defer { anzeigen() }
-        guard automatik, -eigeneAenderung.timeIntervalSinceNow > 5 else { return }
+        guard automatik, vorfuehrung == nil, -eigeneAenderung.timeIntervalSinceNow > 5 else { return }
         angehalten = true
         sollBeimAnhalten = messen().flatMap(soll)
     }
@@ -602,6 +625,9 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
         }
     }
 
+    /// Im Vorführmodus der vorgeführte Zustand, sonst der echte
+    var istDunkel: Bool { vorfuehrung != nil ? !vorfuehrungTag : Erscheinung.dunkel }
+
     func zustandText() -> String {
         guard automatik else {
             return ablage.bool(forKey: "uhrzeitWarAn") || Erscheinung.nachUhrzeit
@@ -616,17 +642,17 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
             return t("Weder Licht noch Bildschirm eingeschaltet – schaltet nichts um",
                      "Neither light nor screen switched on – nothing switches")
         }
-        let jetzt = Erscheinung.dunkel ? t("Gerade dunkel", "Dark right now") : t("Gerade hell", "Light right now")
+        let jetzt = istDunkel ? t("Gerade dunkel", "Dark right now") : t("Gerade hell", "Light right now")
         // warum – damit klar ist, ob das Licht oder der Bildschirm entschieden hat
         var grund = ""
-        if let m = messung, Erscheinung.dunkel {
+        if let m = messung, istDunkel {
             if bildschirmSagt(m) == true && lichtSagt(m) != true {
                 grund = t(" – wegen der Bildschirmhelligkeit", " – because of the screen brightness")
             } else if nachLicht, lichtSagt(m) == nil, (m.lux ?? 0) >= schwelle {
                 grund = t(" – hell wird es erst ab \(lux(hellAb))", " – turns light from \(lux(hellAb))")
             }
         }
-        guard let zuletzt, zuletzt.dunkel == Erscheinung.dunkel else { return jetzt + grund }
+        guard let zuletzt, zuletzt.dunkel == istDunkel else { return jetzt + grund }
         return jetzt + t(", seit \(uhrzeit(zuletzt.zeit))", " since \(uhrzeit(zuletzt.zeit))") + grund
     }
 
@@ -669,6 +695,7 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     func windowWillClose(_ n: Notification) {
         mitlaufen?.invalidate()
         mitlaufen = nil
+        if vorfuehrung != nil { NSApp.terminate(nil) }  // Vorführung: Fenster zu = fertig
         NSApp.setActivationPolicy(.accessory)  // zurück in den Hintergrund
     }
 

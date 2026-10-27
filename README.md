@@ -6,7 +6,7 @@ macOS can switch to dark mode at sunset. But your room doesn't care about sunset
 desk lamp at 4 pm, a bright office at night. Duskmode reads the Mac's ambient light sensor and switches the
 system appearance when it actually gets dark around you – and back when it gets light again.
 
-<p align="center"><img src="docs/screenshot.png" width="480" alt="Duskmode settings window: a live sky showing the ambient light, two bars for light and screen brightness, and the thresholds"></p>
+<p align="center"><img src="docs/screenshot.png" width="760" alt="Duskmode settings window by day and by night: a live sky showing the ambient light and its colour, two bars for light and screen brightness, and the thresholds"></p>
 
 ## Features
 
@@ -73,6 +73,9 @@ Only Apple's Command Line Tools are needed (`xcode-select --install`), no Xcode:
 ```
 
 The whole app is one Swift file, [`Duskmode.swift`](Duskmode.swift). Code comments are in German.
+
+For screenshots there is a demo mode with fixed example values that doesn't touch your system appearance:
+`open -n /Applications/Duskmode.app --args -demo day` (or `-demo night`).
 
 ## Under the hood
 
