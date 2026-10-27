@@ -99,6 +99,12 @@ Login Items*), then delete the app and its settings:
 rm -rf /Applications/Duskmode.app && defaults delete de.jakobbirkner.duskmode
 ```
 
+## Support
+
+Duskmode is free and stays free. If it saves your eyes in the evening and you'd like to say thanks, you can
+[buy me a coffee on Ko-fi](https://ko-fi.com/jakobbirkner) – entirely optional. Bug reports and ideas are just as
+welcome: [open an issue](../../issues).
+
 ## Credits
 
 Inspired by [DarkModeBuddy](https://github.com/insidegui/DarkModeBuddy) by Guilherme Rambo, which showed how to read
