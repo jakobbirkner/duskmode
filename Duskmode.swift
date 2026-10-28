@@ -51,15 +51,27 @@ let themaMeldung = Notification.Name("AppleInterfaceThemeChangedNotification")
 /// Vorführmodus für Screenshots (README): `open -n Duskmode.app --args -demo day` oder `-demo night`.
 /// Zeigt feste, typische Werte statt der Messung und das Fenster hell bzw. dunkel – schaltet aber nichts
 /// am Mac um: kein Erscheinungsbild, keine Uhrzeit-Automatik, kein Autostart, kein Takt.
+/// `-demo dusk` (für ein GIF): alle 12 s Tag → Abend → Tag; nur das Fenster wird dunkel, sobald die App umschalten würde.
 let vorfuehrung = UserDefaults.standard.string(forKey: "demo")
-var vorfuehrungTag: Bool { vorfuehrung != "night" }
+let vorfuehrungStart = Date()
+var vorfuehrungDunkel = vorfuehrung == "night"
+var vorfuehrungTag: Bool { !vorfuehrungDunkel }
 
 /// Ein Nachmittag am Schreibtisch (320 lx, warmes Licht, 3.200 K) bzw. abends bei einer Lampe (0,8 lx, 2.700 K).
 /// XYZ aus dem Farbort des schwarzen Strahlers bei dieser Farbtemperatur, Y = Lux.
 func vorfuehrungsMessung() -> Messung {
-    vorfuehrungTag
-        ? Messung(licht: Licht(lux: 320, x: 339.6, y: 320, z: 142.4), helligkeit: 0.65)
-        : Messung(licht: Licht(lux: 0.8, x: 0.896, y: 0.8, z: 0.252), helligkeit: 0.18)
+    guard vorfuehrung == "dusk" else {
+        return vorfuehrungTag
+            ? Messung(licht: Licht(lux: 320, x: 339.6, y: 320, z: 142.4), helligkeit: 0.65)
+            : Messung(licht: Licht(lux: 0.8, x: 0.896, y: 0.8, z: 0.252), helligkeit: 0.18)
+    }
+    // 2 s Tag, 4 s Dämmerung, 2 s Abend, 4 s wieder hell; a: 0 = Tag, 1 = Abend
+    let s = Date().timeIntervalSince(vorfuehrungStart).truncatingRemainder(dividingBy: 12)
+    let a = s < 2 ? 0 : s < 6 ? (s - 2) / 4 : s < 8 ? 1 : 1 - (s - 8) / 4
+    let w = (1 - cos(a * .pi)) / 2                                 // weich an- und auslaufen
+    func hin(_ tag: Double, _ abend: Double) -> Double { tag * pow(abend / tag, w) }  // logarithmisch
+    return Messung(licht: Licht(lux: hin(320, 0.8), x: hin(339.6, 0.896), y: hin(320, 0.8), z: hin(142.4, 0.252)),
+                   helligkeit: 0.65 + (0.18 - 0.65) * w)
 }
 
 let deutsch = Locale.preferredLanguages.first?.hasPrefix("de") ?? false
@@ -455,6 +467,11 @@ final class App: NSObject, NSApplicationDelegate, NSWindowDelegate, ObservableOb
     /// `frisch`: beim Start oder Aufwachen gibt es keinen eigenen letzten Stand, den der Abstand schützen
     /// müsste (macOS hat beim Beenden vielleicht selbst umgestellt) – dann im Zwischenbereich an der Mitte.
     func entscheide(_ gemessen: Messung?, frisch: Bool = false) {
+        if vorfuehrung == "dusk", let m = gemessen, let s = soll(m), s != vorfuehrungDunkel {
+            vorfuehrungDunkel = s  // nur das Fenster, nicht der Mac
+            NSApp.appearance = NSAppearance(named: s ? .darkAqua : .aqua)
+            zuletzt = (s, Date())
+        }
         guard automatik, vorfuehrung == nil, let m = gemessen, Date() >= ruhigBis,
               -eigeneAenderung.timeIntervalSinceNow > 1 else { return }  // eben erst umgeschaltet
         var s = soll(m)

@@ -24,6 +24,8 @@ system appearance when it actually gets dark around you – and back when it get
 The sensor next to the camera is the same one macOS uses for auto-brightness and True Tone. It is a colour light
 sensor (a single measuring point, not an image) and reports the illuminance in lux plus the colour of the light.
 
+<p align="center"><img src="docs/dusk.gif" width="480" alt="Animation: the light drops from 320 lx to below 1 lx, the sky turns from day to night and the window switches to dark below 12 lx; on the way back it turns light only from 16 lx"></p>
+
 - Below **"Dark below"** it switches to dark. It switches back to light only above **"Dark below" + "Gap"**.
   The gap is not a delay – it stops sensor noise and the light of your own screen (which the sensor also sees)
   from flipping the appearance back and forth right at the threshold.
