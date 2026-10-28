@@ -4,20 +4,20 @@
 
 macOS can switch to dark mode at sunset. But your room doesn't care about sunset: blinds down at noon, a dim
 desk lamp at 4 pm, a bright office at night. Duskmode reads the Mac's ambient light sensor and switches the
-system appearance when it actually gets dark around you – and back when it gets light again.
+system appearance when it actually gets dark around you, and back when it gets light again.
 
 <p align="center"><img src="docs/screenshot.png" width="760" alt="Duskmode settings window by day and by night: a live sky showing the ambient light and its colour, two bars for light and screen brightness, and the thresholds"></p>
 
 ## Features
 
-- **Switches by ambient light** – dark below a threshold you choose, light again above threshold + gap.
-- **Optionally by screen brightness** – a very dim screen can count as "dark" too. Each criterion has its own switch.
-- **Respects you** – switch the appearance by hand and Duskmode backs off until the light really changes.
-- **Live view** – a little sky with the current light level and the *colour* of the light (e.g. "2,800 K · warm"),
-  plus two bars that show where you are relative to your thresholds.
-- **Invisible** – no Dock icon, no menu bar icon (optional). Open the app again to get the settings window.
-- **Light on energy** – see below. No network, no tracking.
-- **English and German**, picked automatically from your system language.
+- Dark below a light level you choose, light again above that level plus a gap.
+- Optionally by screen brightness too: a very dim screen counts as dark. Light and screen each have their own switch.
+- If you switch the appearance by hand, Duskmode leaves it alone until the light really changes.
+- The settings window shows a little sky with the current light level and the colour of the light
+  ("2,800 K · warm"), plus two bars that show where you are relative to your thresholds.
+- No Dock icon, menu bar icon only if you want one. Open the app again to get the settings.
+- Uses almost no energy (see below). No network access, no tracking.
+- English and German, picked from your system language.
 
 ## How it works
 
@@ -27,12 +27,12 @@ sensor (a single measuring point, not an image) and reports the illuminance in l
 <p align="center"><img src="docs/dusk.gif" width="480" alt="Animation: the light drops from 320 lx to below 1 lx, the sky turns from day to night and the window switches to dark below 12 lx; on the way back it turns light only from 16 lx"></p>
 
 - Below **"Dark below"** it switches to dark. It switches back to light only above **"Dark below" + "Gap"**.
-  The gap is not a delay – it stops sensor noise and the light of your own screen (which the sensor also sees)
+  The gap is not a delay. It stops sensor noise and the light of your own screen (which the sensor also sees)
   from flipping the appearance back and forth right at the threshold.
 - With **screen brightness** enabled, a screen below your percentage counts as dark as well. It turns dark as soon
   as either criterion says dark.
 - If you change the appearance yourself, Duskmode pauses until the light crosses to the other side.
-- With the lid closed (external display only) it doesn't measure – the sensor is covered.
+- With the lid closed (external display only) it doesn't measure, since the sensor is covered.
 - macOS' own *Appearance: Auto* would fight with it, so Duskmode turns that off while it runs and restores it when
   you quit.
 
@@ -46,7 +46,7 @@ times per second, for the live view and an instant reaction.
 
 ## Requirements
 
-- A Mac with a **built-in display and ambient light sensor** – MacBook Air / MacBook Pro, probably the iMac too
+- A Mac with a **built-in display and ambient light sensor**: MacBook Air / MacBook Pro, probably the iMac too
   (untested). Mac mini and Mac Studio have no light sensor.
 - **Apple Silicon** and **macOS 14** or later.
 - So far tested on one machine (MacBook Pro M5, macOS 27). Reports from other Macs are very welcome.
@@ -77,7 +77,7 @@ Only Apple's Command Line Tools are needed (`xcode-select --install`), no Xcode:
 The whole app is one Swift file, [`Duskmode.swift`](Duskmode.swift). Code comments are in German.
 
 For screenshots there is a demo mode with fixed example values that doesn't touch your system appearance:
-`open -n /Applications/Duskmode.app --args -demo day` (or `-demo night`).
+`open -n /Applications/Duskmode.app --args -demo day` (or `-demo night`, or `-demo dusk` for a 12-second loop).
 
 ## Under the hood
 
@@ -104,8 +104,8 @@ rm -rf /Applications/Duskmode.app && defaults delete de.jakobbirkner.duskmode
 ## Support
 
 Duskmode is free and stays free. If it saves your eyes in the evening and you'd like to say thanks, you can
-[buy me a coffee on Ko-fi](https://ko-fi.com/jakobbirkner) – entirely optional. Bug reports and ideas are just as
-welcome: [open an issue](../../issues).
+[buy me a coffee on Ko-fi](https://ko-fi.com/jakobbirkner). Bug reports and ideas are just as welcome:
+[open an issue](../../issues).
 
 ## Credits
 
